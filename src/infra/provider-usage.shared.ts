@@ -15,6 +15,7 @@ export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   minimax: "MiniMax",
   "openai-codex": "Codex",
   xiaomi: "Xiaomi",
+  "xiaomi-token-plan": "Xiaomi Token Plan",
   zai: "z.ai",
 };
 
@@ -25,6 +26,7 @@ export const usageProviders: UsageProviderId[] = [
   "minimax",
   "openai-codex",
   "xiaomi",
+  "xiaomi-token-plan",
   "zai",
 ];
 

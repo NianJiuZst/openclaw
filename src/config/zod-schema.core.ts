@@ -443,6 +443,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "vydra",
   "xai",
   "xiaomi",
+  "xiaomi-token-plan",
   "zai",
 ]);
 
