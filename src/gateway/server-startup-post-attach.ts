@@ -344,6 +344,12 @@ function scheduleAgentRuntimePluginPrewarm(params: {
     warn: (msg: string) => void;
   };
   delayMs?: number;
+  // Invoked after the deferred registry is built so callers can re-pin the
+  // gateway runtime and start plugin services. Cold-boot deferred plugins
+  // (loaded without activation.onStartup) need this to wire their HTTP routes
+  // and service start() callbacks into the live listener; startup plugins
+  // already wire up inside createGatewayRuntimeState and can omit it.
+  onRegistryLoaded?: (loaded: PluginRegistry) => Awaitable<void>;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -361,11 +367,14 @@ function scheduleAgentRuntimePluginPrewarm(params: {
         if (isStopped()) {
           return;
         }
-        ensureRuntimePluginsLoaded({
+        const loaded = ensureRuntimePluginsLoaded({
           config: cfg,
           workspaceDir: params.workspaceDir,
           allowGatewaySubagentBinding: true,
         });
+        if (loaded && params.onRegistryLoaded) {
+          await params.onRegistryLoaded(loaded);
+        }
         if (!isStopped()) {
           params.log.info(
             `agent runtime plugins pre-warmed in ${(performance.now() - started).toFixed(0)}ms`,
@@ -1191,6 +1200,7 @@ export async function startGatewayPostAttachRuntime(
       enabled?: boolean;
       delayMs?: number;
       getConfig?: () => OpenClawConfig;
+      onRegistryLoaded?: (loaded: PluginRegistry) => Awaitable<void>;
     };
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
@@ -1353,6 +1363,7 @@ export async function startGatewayPostAttachRuntime(
               startupTrace: params.startupTrace,
               log: params.log,
               delayMs: params.agentRuntimePluginPrewarm?.delayMs,
+              onRegistryLoaded: params.agentRuntimePluginPrewarm?.onRegistryLoaded,
             }),
           );
         }

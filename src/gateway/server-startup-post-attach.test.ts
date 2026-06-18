@@ -62,7 +62,9 @@ const hoisted = vi.hoisted(() => {
     inCatalog: true,
   }));
   const ensureOpenClawModelsJson = vi.fn(async () => {});
-  const ensureRuntimePluginsLoaded = vi.fn();
+  const ensureRuntimePluginsLoaded = vi.fn<
+    (params?: unknown) => { plugins?: unknown[]; services?: unknown[] } | undefined
+  >(() => undefined);
   const clearCurrentProviderAuthState = vi.fn();
   const warmCurrentProviderAuthStateOffMainThread = vi.fn(
     async (_cfg?: unknown, _options?: unknown) => {},
@@ -1042,6 +1044,59 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.ensureRuntimePluginsLoaded).not.toHaveBeenCalledWith(
       expect.objectContaining({ config: startupConfig }),
     );
+  });
+
+  it("invokes onRegistryLoaded when the deferred prewarm resolves a runtime registry", async () => {
+    const loadedRegistry = {
+      plugins: [{ id: "demo", status: "loaded" }],
+      services: [{ pluginId: "demo", service: { id: "demo-service", start: () => {} } }],
+    } as never;
+    hoisted.ensureRuntimePluginsLoaded.mockReturnValueOnce(loadedRegistry);
+    const onRegistryLoaded = vi.fn(async () => {});
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      providerAuthPrewarm: { enabled: false },
+      agentRuntimePluginPrewarm: {
+        enabled: true,
+        delayMs: 0,
+        getConfig: () => ({}) as never,
+        onRegistryLoaded,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onRegistryLoaded).toHaveBeenCalledTimes(1);
+    });
+    expect(onRegistryLoaded).toHaveBeenCalledWith(loadedRegistry);
+  });
+
+  it("skips onRegistryLoaded when the deferred prewarm does not load a runtime registry", async () => {
+    hoisted.ensureRuntimePluginsLoaded.mockReturnValueOnce(undefined);
+    const onRegistryLoaded = vi.fn(async () => {});
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      providerAuthPrewarm: { enabled: false },
+      agentRuntimePluginPrewarm: {
+        enabled: true,
+        delayMs: 0,
+        getConfig: () => ({}) as never,
+        onRegistryLoaded,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.ensureRuntimePluginsLoaded).toHaveBeenCalled();
+    });
+    // Give the timer queue a chance to run onRegistryLoaded if it were going
+    // to be called.
+    await new Promise<void>((resolve) => {
+      setImmediate(() => {
+        resolve();
+      });
+    });
+    expect(onRegistryLoaded).not.toHaveBeenCalled();
   });
 
   it("keeps provider auth prewarm alive when Gmail post-ready sidecars stop", async () => {

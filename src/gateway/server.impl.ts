@@ -1042,6 +1042,7 @@ export async function startGatewayServer(
       channelIds,
       stopChannel,
       pluginServices: runtimeState.pluginServices,
+      runtimePluginServices: runtimeState.runtimePluginServices,
       postReadySidecars: runtimeState.postReadySidecars,
       cron: runtimeState.cronState.cron,
       heartbeatRunner: runtimeState.heartbeatRunner,
@@ -1689,6 +1690,44 @@ export async function startGatewayServer(
             deferSidecars: deferStartupSidecars,
             logReadyOnSidecars: !deferStartupSidecars,
             providerAuthPrewarm: { getConfig: getRuntimeConfig },
+            // Cold-boot deferred plugins (loaded via plugins.load.paths without
+            // activation.onStartup) need their HTTP routes and service start()
+            // callbacks wired into the running gateway. The startup path does
+            // this inside createGatewayRuntimeState; the deferred path needs
+            // the same wiring after the standalone runtime registry finishes
+            // loading. See issue #94572.
+            agentRuntimePluginPrewarm: {
+              getConfig: getRuntimeConfig,
+              onRegistryLoaded: async (loaded) => {
+                replaceAttachedPluginRuntime({
+                  pluginRegistry: loaded,
+                  gatewayMethods: listAttachedGatewayMethods(),
+                });
+                await refreshAttachedGatewayDiscovery(loaded);
+                if (closePreludeStarted) {
+                  return;
+                }
+                // Track previously-started services so the deferred path can
+                // roll back instead of leaking if a later call replaces them.
+                const previousRuntimePluginServices = runtimeState.runtimePluginServices;
+                runtimeState.runtimePluginServices = null;
+                if (previousRuntimePluginServices) {
+                  await previousRuntimePluginServices.stop().catch((err: unknown) => {
+                    log.warn(`plugin services stop failed before deferred reload: ${String(err)}`);
+                  });
+                }
+                try {
+                  const { startPluginServices } = await import("../plugins/services.js");
+                  runtimeState.runtimePluginServices = await startPluginServices({
+                    registry: loaded,
+                    config: gatewayPluginConfigAtStart,
+                    workspaceDir: defaultWorkspaceDir,
+                  });
+                } catch (err) {
+                  log.warn(`plugin services failed to start after deferred load: ${String(err)}`);
+                }
+              },
+            },
           }),
       ),
     ));
