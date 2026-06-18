@@ -634,6 +634,7 @@ export function createGatewayCloseHandler(
     channelIds?: readonly ChannelId[];
     stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
     pluginServices: PluginServicesHandle | null;
+    runtimePluginServices?: PluginServicesHandle | null;
     postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
@@ -797,6 +798,15 @@ export function createGatewayCloseHandler(
       if (params.pluginServices) {
         await measureCloseStep("plugin-services", () =>
           shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings),
+        );
+      }
+      if (params.runtimePluginServices) {
+        await measureCloseStep("runtime-plugin-services", () =>
+          shutdownStep(
+            "runtime-plugin-services",
+            () => params.runtimePluginServices!.stop(),
+            warnings,
+          ),
         );
       }
       await measureCloseStep("channels", async () => {

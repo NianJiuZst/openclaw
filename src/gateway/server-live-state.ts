@@ -15,6 +15,10 @@ export type GatewayServerLiveState = GatewayServerMutableState & {
   hookClientIpConfig: HookClientIpConfig;
   cronState: GatewayCronState;
   pluginServices: PluginServicesHandle | null;
+  // Services for plugin registries built by the post-ready deferred plugin
+  // prewarm. Kept separate from `pluginServices` (which owns the startup
+  // path's handle) so close() can stop both without leaking either.
+  runtimePluginServices: PluginServicesHandle | null;
   gatewayMethods: string[];
 };
 
@@ -31,6 +35,7 @@ export function createGatewayServerLiveState(params: {
     hookClientIpConfig: params.hookClientIpConfig,
     cronState: params.cronState,
     pluginServices: null,
+    runtimePluginServices: null,
     gatewayMethods: params.gatewayMethods,
   };
 }
