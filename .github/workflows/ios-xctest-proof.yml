@@ -1,0 +1,73 @@
+name: Temporary iOS XCTest proof
+
+on:
+  push:
+    branches:
+      - codex/proof-108241-ios-xctest
+
+permissions:
+  contents: read
+
+jobs:
+  gateway-connection-controller-tests:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Select Xcode 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+            if [[ -d "$xcode_app/Contents/Developer" ]]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          [[ "$(xcodebuild -version | awk 'NR == 1 { print $2 }')" == 26.* ]]
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Install iOS Swift tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+
+      - name: Generate iOS project
+        shell: bash
+        run: pnpm ios:gen
+
+      - name: Select iOS simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          simulator_id="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.isAvailable and (.name | startswith("iPhone")))] | first | .udid')"
+          if [[ -z "$simulator_id" || "$simulator_id" == "null" ]]; then
+            xcrun simctl list devices available
+            exit 1
+          fi
+          xcrun simctl boot "$simulator_id" || true
+          xcrun simctl bootstatus "$simulator_id" -b
+          echo "IOS_SIMULATOR_UDID=$simulator_id" >> "$GITHUB_ENV"
+
+      - name: Run GatewayConnectionControllerTests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd apps/ios
+          xcodebuild \
+            -project OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_UDID" \
+            -only-testing:OpenClawTests/GatewayConnectionControllerTests \
+            test
