@@ -1,0 +1,45 @@
+name: PR 111747 Play Debug APK
+
+on:
+  push:
+    branches:
+      - codex/pr-111747-play-debug-artifact
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-111747-play-debug-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build-play-debug
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: 6d7a3e2f459868d15b2e1985a09519865b00d83d
+          persist-credentials: false
+
+      - name: Verify exact source
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "6d7a3e2f459868d15b2e1985a09519865b00d83d"
+
+      - name: Setup Android toolchain
+        uses: ./.github/actions/setup-android-toolchain
+
+      - name: Build Play Debug APK
+        working-directory: apps/android
+        run: ./gradlew --no-daemon :app:assemblePlayDebug
+
+      - name: Upload Play Debug APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-pr-111747-play-debug
+          path: apps/android/app/build/outputs/apk/play/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
