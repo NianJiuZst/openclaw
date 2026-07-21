@@ -1077,7 +1077,7 @@ internal fun WelcomeScreen(
 ) {
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize()) {
-      // Keep the action outside the scroller so font scaling cannot make Continue unreachable.
+      // Keep actions outside the scroller so font scaling cannot push them out of reach.
       Column(
         modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1228,7 +1228,7 @@ private fun SoftPanel(
 }
 
 @Composable
-private fun GatewaySetupScreen(
+internal fun GatewaySetupScreen(
   nearbyGateway: GatewayEndpoint?,
   onBack: () -> Unit,
   onSetupCode: () -> Unit,
@@ -1240,8 +1240,12 @@ private fun GatewaySetupScreen(
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize()) {
       OnboardingHeader(title = nativeText(""), onBack = onBack)
-      OnboardingHeroTopSpacer(afterHeader = true)
-      Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+      // Keep actions outside the scroller so font scaling cannot push them out of reach.
+      Column(
+        modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        OnboardingHeroTopSpacer(afterHeader = true)
         OnboardingIntroHero(
           title = nativeString("Connect Gateway"),
           subtitle = nativeString("Scan a QR code or use the setup code from your OpenClaw Gateway."),
@@ -1257,8 +1261,8 @@ private fun GatewaySetupScreen(
             }
           },
         )
+        Spacer(modifier = Modifier.height(24.dp))
       }
-      Spacer(modifier = Modifier.weight(1f))
       OnboardingActions {
         ClawPrimaryButton(
           text = nativeString("Scan QR or setup code"),
