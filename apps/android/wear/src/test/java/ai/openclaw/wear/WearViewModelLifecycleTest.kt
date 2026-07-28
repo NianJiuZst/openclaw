@@ -1,6 +1,8 @@
 package ai.openclaw.wear
 
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import org.junit.Assert.assertFalse
@@ -18,22 +20,27 @@ class WearViewModelLifecycleTest {
   @Test
   fun recreatedViewModelGetsALiveTalkClientAfterThePreviousOneClears() {
     val app = RuntimeEnvironment.getApplication() as WearApplication
-    val firstViewModel = WearViewModel(app)
+    val factory = ViewModelProvider.AndroidViewModelFactory.getInstance(app)
+    val firstOwner = TestViewModelStoreOwner()
+    val firstViewModel = ViewModelProvider(firstOwner, factory)[WearViewModel::class.java]
     val firstClient = firstViewModel.realtimeTalkClientForTest()
-    val firstStore = ViewModelStore().apply { put("wear", firstViewModel) }
 
-    firstStore.clear()
+    firstOwner.viewModelStore.clear()
 
-    val reopenedViewModel = WearViewModel(app)
+    val reopenedOwner = TestViewModelStoreOwner()
+    val reopenedViewModel = ViewModelProvider(reopenedOwner, factory)[WearViewModel::class.java]
     val reopenedClient = reopenedViewModel.realtimeTalkClientForTest()
-    val reopenedStore = ViewModelStore().apply { put("wear", reopenedViewModel) }
     try {
       assertFalse(firstClient.scopeForTest().coroutineContext[Job]?.isActive == true)
       assertNotSame(firstClient, reopenedClient)
       assertTrue(reopenedClient.scopeForTest().coroutineContext[Job]?.isActive == true)
     } finally {
-      reopenedStore.clear()
+      reopenedOwner.viewModelStore.clear()
     }
+  }
+
+  private class TestViewModelStoreOwner : ViewModelStoreOwner {
+    override val viewModelStore = ViewModelStore()
   }
 
   private fun WearViewModel.realtimeTalkClientForTest(): WearRealtimeTalkClient =
