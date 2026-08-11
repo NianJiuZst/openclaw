@@ -118,7 +118,8 @@ describe("client bootstrap", () => {
   });
 
   it("exposes deferred startup through the shared lease owner", async () => {
-    const sharedClient = createMockMatrixClient();
+    const clientStart = vi.fn(async () => undefined);
+    const sharedClient = Object.assign(createMockMatrixClient(), { start: clientStart });
     setAcquiredMatrixClient(sharedClient);
     sharedLeaseStartMock.mockResolvedValue(undefined);
 
@@ -128,7 +129,7 @@ describe("client bootstrap", () => {
     );
 
     expect(sharedLeaseStartMock).toHaveBeenCalledTimes(1);
-    expect(sharedClient.start).not.toHaveBeenCalled();
+    expect(clientStart).not.toHaveBeenCalled();
   });
 
   it("does not borrow or stop an explicitly injected client", async () => {

@@ -341,7 +341,9 @@ describe("shared Matrix client generations", () => {
       return lease;
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(monitor).toBeUndefined();
 
     await transient.release({ mode: "persist" });
@@ -428,7 +430,9 @@ describe("shared Matrix client generations", () => {
       },
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(transient).toBeUndefined();
     expect(client.start).not.toHaveBeenCalled();
 

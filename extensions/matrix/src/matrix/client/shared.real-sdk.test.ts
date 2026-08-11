@@ -117,7 +117,10 @@ describe("shared Matrix lifecycle with the real SDK", () => {
     let savedFilter: unknown = {};
     let burstSyncCount = 0;
 
-    const server = http.createServer(async (request, response) => {
+    const handleRequest = async (
+      request: http.IncomingMessage,
+      response: http.ServerResponse,
+    ): Promise<void> => {
       try {
         const method = request.method ?? "GET";
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -185,29 +188,38 @@ describe("shared Matrix lifecycle with the real SDK", () => {
           response.destroy(error instanceof Error ? error : new Error(String(error)));
         }
       }
+    };
+    const server = http.createServer((request, response) => {
+      void handleRequest(request, response);
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("Matrix test server did not bind a TCP port");
     }
     const homeserver = `http://127.0.0.1:${address.port}`;
-    let auth: Awaited<ReturnType<typeof resolveMatrixAuth>> | undefined;
+    const cleanupState: {
+      auth?: Awaited<ReturnType<typeof resolveMatrixAuth>>;
+      monitorTask?: Promise<unknown>;
+      outboundPromise?: Promise<unknown>;
+    } = {};
     let monitorLease: SharedMatrixClientLease | undefined;
-    let monitorTask: Promise<unknown> | undefined;
-    let outboundPromise: Promise<unknown> | undefined;
     cleanup = async () => {
       allowSend.resolve();
       for (const response of pendingSyncResponses) {
         response.destroy();
       }
-      const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
+      const serverClosed = new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
       server.closeAllConnections();
       await monitorLease?.release({ mode: "persist" }).catch(() => undefined);
-      if (auth) {
-        await stopSharedClientForAccount(auth).catch(() => undefined);
+      if (cleanupState.auth) {
+        await stopSharedClientForAccount(cleanupState.auth).catch(() => undefined);
       }
-      await Promise.allSettled([outboundPromise, monitorTask]);
+      await Promise.allSettled([cleanupState.outboundPromise, cleanupState.monitorTask]);
       await serverClosed;
       resetPluginStateStoreForTests();
       fs.rmSync(stateDir, { recursive: true, force: true });
@@ -233,7 +245,8 @@ describe("shared Matrix lifecycle with the real SDK", () => {
         },
       } as unknown as PluginRuntime["channel"],
     });
-    auth = await resolveMatrixAuth({ cfg });
+    const auth = await resolveMatrixAuth({ cfg });
+    cleanupState.auth = auth;
     const storagePaths = resolveMatrixStoragePaths({
       homeserver: auth.homeserver,
       userId: auth.userId,
@@ -246,12 +259,13 @@ describe("shared Matrix lifecycle with the real SDK", () => {
     seedStore.markCleanShutdown();
     await seedStore.flush();
 
-    outboundPromise = matrixOutbound.sendText!({
+    const outboundPromise = matrixOutbound.sendText!({
       cfg,
       to: `room:${ROOM_ID}`,
       text: "outbound proof",
       accountId: "default",
     });
+    cleanupState.outboundPromise = outboundPromise;
     await Promise.race([
       sendRequested.promise,
       outboundPromise.then(() => {
@@ -306,9 +320,11 @@ describe("shared Matrix lifecycle with the real SDK", () => {
       lease.client.off("sync.state", onSyncState);
       return { disposeEvents, lease };
     });
-    monitorTask = monitorPromise;
+    cleanupState.monitorTask = monitorPromise;
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     allowSend.resolve();
     const outbound = await outboundPromise;
     outboundCompleted = true;
