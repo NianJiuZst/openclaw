@@ -212,17 +212,11 @@ function listReloadRules(): ReloadRule[] {
         ),
       );
   });
-  const channelPluginStateRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
-    {
-      prefix: `plugins.entries.${plugin.id}`,
-      kind: "hot",
-      actions: [
-        "reload-plugins",
-        "dispose-mcp-runtimes",
-        `restart-channel:${plugin.id}` as ReloadAction,
-      ],
-    },
-  ]);
+  const channelPluginStateRules: ReloadRule[] = listChannelPlugins().map((plugin) => ({
+    prefix: `plugins.entries.${plugin.id}`,
+    kind: "hot",
+    actions: ["reload-plugins", "dispose-mcp-runtimes"],
+  }));
   const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
     (entry.registration.restartPrefixes ?? [])
       .map(
@@ -474,6 +468,11 @@ export function buildGatewayReloadPlan(
         break;
       case "reload-plugins":
         plan.reloadPlugins = true;
+        // Registry replacement retires every channel runtime binding; restart
+        // each owner so no live monitor retains the retired generation.
+        for (const plugin of listChannelPlugins()) {
+          plan.restartChannels.add(plugin.id);
+        }
         break;
       case "dispose-mcp-runtimes":
         plan.disposeMcpRuntimes = true;
