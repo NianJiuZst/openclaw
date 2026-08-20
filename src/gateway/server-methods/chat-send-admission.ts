@@ -411,36 +411,46 @@ export async function admitChatSend(params: {
     });
     return { ok: false as const };
   }
-  let interruptedActiveRun = false;
-  let interruptionSettled = true;
-  if (runInterruptTarget) {
-    interruptedActiveRun = true;
-    interruptionSettled = (
-      await interruptReplyRunTarget(runInterruptTarget, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
-    ).settled;
-  } else if (p.queueMode === "interrupt") {
-    const identities = [sessionKey, backingSessionId, admittedSessionId];
-    // The fallback runs inside the new admission so the lifecycle owner excludes itself.
-    // A captured reply operation never falls through to this identity-scoped path.
-    const fallback = await gatewayWorkAdmission.run(async () => {
-      if (!isCompetingSessionWorkAdmissionActive(storePath, identities)) {
-        return { interrupted: false, settled: true };
-      }
-      return {
-        interrupted: true,
-        settled: await interruptSessionWorkAdmissions({
-          scope: storePath,
-          identities,
-          timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-        }),
-      };
-    });
-    interruptedActiveRun = fallback.interrupted;
-    interruptionSettled = fallback.settled;
-  }
-  if (!interruptionSettled) {
+  // Cancellation is outside this request's owner boundary and may throw. Until
+  // dispatch takes custody, every such failure must release both admitted owners.
+  const cleanupPreDispatchAdmission = () => {
     activeRunAbort.cleanup({ force: true });
     gatewayWorkAdmission.release();
+  };
+  let interruptedActiveRun = false;
+  let interruptionSettled = true;
+  try {
+    if (runInterruptTarget) {
+      interruptedActiveRun = true;
+      interruptionSettled = (
+        await interruptReplyRunTarget(runInterruptTarget, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
+      ).settled;
+    } else if (p.queueMode === "interrupt") {
+      const identities = [sessionKey, backingSessionId, admittedSessionId];
+      // The fallback runs inside the new admission so the lifecycle owner excludes itself.
+      // A captured reply operation never falls through to this identity-scoped path.
+      const fallback = await gatewayWorkAdmission.run(async () => {
+        if (!isCompetingSessionWorkAdmissionActive(storePath, identities)) {
+          return { interrupted: false, settled: true };
+        }
+        return {
+          interrupted: true,
+          settled: await interruptSessionWorkAdmissions({
+            scope: storePath,
+            identities,
+            timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+          }),
+        };
+      });
+      interruptedActiveRun = fallback.interrupted;
+      interruptionSettled = fallback.settled;
+    }
+  } catch (error) {
+    cleanupPreDispatchAdmission();
+    throw error;
+  }
+  if (!interruptionSettled) {
+    cleanupPreDispatchAdmission();
     respond(
       false,
       undefined,
@@ -462,14 +472,12 @@ export async function admitChatSend(params: {
     try {
       proceed = await gatewayWorkAdmission.run(params.onAdmissionOwned);
     } catch (error) {
-      activeRunAbort.cleanup({ force: true });
-      gatewayWorkAdmission.release();
+      cleanupPreDispatchAdmission();
       releaseGatewayRootContinuation();
       throw error;
     }
     if (!proceed) {
-      activeRunAbort.cleanup({ force: true });
-      gatewayWorkAdmission.release();
+      cleanupPreDispatchAdmission();
       releaseGatewayRootContinuation();
       return { ok: false as const };
     }
