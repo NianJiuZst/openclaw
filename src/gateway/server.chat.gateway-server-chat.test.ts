@@ -483,6 +483,46 @@ describe("gateway server chat", () => {
       });
       expect(res.ok).toBe(false);
       await waitForFast(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+      const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
+      expect(reset.ok).toBe(true);
+    });
+  });
+
+  test("chat.send interrupt releases its admission when session interruption throws", async () => {
+    await withMainSessionStore(async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      const activeAdmission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: ["agent:main:main", "sess-main"],
+        assertAllowed: () => {},
+        onInterrupt: () => {
+          activeAdmission.release();
+          throw new Error("session interruption failed");
+        },
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "replace non-reply session work",
+          queueMode: "interrupt",
+          idempotencyKey: "idem-chat-interrupt-non-reply-throw",
+        });
+
+        expect(res.ok).toBe(false);
+        await waitForFast(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
+        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+        const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
+        expect(reset.ok).toBe(true);
+      } finally {
+        activeAdmission.release();
+      }
     });
   });
 
