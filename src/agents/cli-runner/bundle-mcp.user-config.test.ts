@@ -342,7 +342,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
           ?.tools.map((tool) => tool.toolName),
       ).toEqual(["read_docs"]);
       expect(raw.mcpServers?.docs).toMatchObject({
-        headers: { Authorization: "Bearer stale-token" },
+        headers: { Authorization: "Bearer fresh-token" },
       });
       expect(raw.mcpServers?.docs?.auth).toBeUndefined();
       expect(raw.mcpServers?.docs?.oauth).toBeUndefined();
