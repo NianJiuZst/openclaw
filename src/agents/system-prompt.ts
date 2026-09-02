@@ -44,6 +44,7 @@ import {
   buildFullBootstrapPromptLines,
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
+import { buildTemporalContextSection } from "./date-time.js";
 import { buildDelegationGuidanceSection } from "./delegation-guidance.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type {
@@ -416,25 +417,6 @@ function buildOwnerIdentityLine(
     return undefined;
   }
   return `${OWNER_PROMPT_PREFIX}${displayOwnerNumbers.join(", ")}${OWNER_PROMPT_SUFFIX}`;
-}
-
-function buildTemporalContextSection(params: {
-  userDate?: string;
-  userTimezone?: string;
-  sessionStatusAvailable: boolean;
-}) {
-  const userDate = params.userDate?.trim();
-  const userTimezone = params.userTimezone?.trim();
-  if (!userDate || !userTimezone) {
-    return [];
-  }
-  return [
-    "## Temporal Context",
-    `Current date: ${userDate}`,
-    `Time zone: ${userTimezone}`,
-    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
-    "",
-  ];
 }
 
 function buildAssistantOutputDirectivesSection(params: {

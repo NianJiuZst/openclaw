@@ -298,6 +298,7 @@ const baseConfig: OpenClawConfig = {
   },
   agents: {
     defaults: {
+      userTimezone: "UTC",
       heartbeat: {
         every: "30m",
       },
@@ -410,6 +411,7 @@ function createAttempt(params: {
     sessionKey: params.sessionKey,
     sessionId: `session-${params.scenario.id}`,
     runId: `run-${params.scenario.id}`,
+    startedAtMs: Date.parse("2026-01-01T00:00:00.000Z"),
     provider: "codex",
     modelId: MODEL_ID,
     model: happyPathModel,
