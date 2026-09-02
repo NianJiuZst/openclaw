@@ -438,9 +438,18 @@ export async function prepareCliBundleMcpConfig(params: {
     ),
   };
   if (params.nativeMcpPolicy && Object.keys(policyConfig.mcpServers).length > 0) {
+    // Native policy discovery runs in-process and owns OAuth refresh. Restrict it
+    // to projected survivors without passing external-runtime bearer placeholders.
+    const runtimePolicyConfig: BundleMcpConfig = {
+      mcpServers: Object.fromEntries(
+        Object.entries(mergedConfig.mcpServers).filter(([serverName]) =>
+          Object.hasOwn(policyConfig.mcpServers, serverName),
+        ),
+      ),
+    };
     const runtimeConfig: OpenClawConfig = {
       ...params.config,
-      mcp: { ...params.config?.mcp, servers: policyConfig.mcpServers },
+      mcp: { ...params.config?.mcp, servers: runtimePolicyConfig.mcpServers },
     };
     const runtime = await getOrCreateSessionMcpRuntime({
       sessionId: params.nativeMcpPolicy.sessionId,
