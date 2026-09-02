@@ -72,6 +72,7 @@ export function buildTurnStartParams(
     memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
     clearInheritedServiceTier?: boolean;
+    sessionStatusAvailable?: boolean;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
@@ -95,15 +96,11 @@ export function buildTurnStartParams(
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
   const currentSenderContext =
     params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
-  const temporalContext = buildTemporalContextText(
-    params.config?.agents?.defaults?.userTimezone,
-    params.startedAtMs,
-  );
   // Codex emits only changed values and cannot retract omitted fragments from model history.
   // Always send configured-or-host context so warm threads see rollover and removed overrides.
-  let additionalContext: CodexTurnStartParams["additionalContext"] = {
-    openclaw_temporal_context: { kind: "application", value: temporalContext },
-  };
+  let additionalContext = buildCodexTemporalAdditionalContext(params, {
+    sessionStatusAvailable: options.sessionStatusAvailable === true,
+  });
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
   if (currentSenderContext) {
     additionalContext = {
@@ -163,6 +160,21 @@ export function buildTurnStartParams(
         }
       : {}),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
+  };
+}
+
+export function buildCodexTemporalAdditionalContext(
+  params: Pick<EmbeddedRunAttemptParams, "config">,
+  options: { sessionStatusAvailable: boolean },
+): NonNullable<CodexTurnStartParams["additionalContext"]> {
+  return {
+    openclaw_temporal_context: {
+      kind: "application",
+      value: buildTemporalContextText({
+        configuredTimezone: params.config?.agents?.defaults?.userTimezone,
+        sessionStatusAvailable: options.sessionStatusAvailable,
+      }),
+    },
   };
 }
 

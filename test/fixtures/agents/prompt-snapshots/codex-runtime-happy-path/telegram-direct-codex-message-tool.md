@@ -147,7 +147,7 @@
     },
     "openclaw_temporal_context": {
       "kind": "application",
-      "value": "## Temporal Context\nCurrent date: 2026-01-01\nTime zone: UTC"
+      "value": "## Temporal Context\nCurrent date: 2026-01-01\nTime zone: UTC\nFor the exact current time, use `session_status`."
     }
   },
   "approvalPolicy": "never",

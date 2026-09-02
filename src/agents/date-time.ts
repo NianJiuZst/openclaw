@@ -84,12 +84,15 @@ export function buildTemporalContextSection(params: {
 }
 
 /** Build current prompt text using the configured timezone or the canonical host fallback. */
-export function buildTemporalContextText(configuredTimezone?: string, nowMs = Date.now()): string {
-  const userTimezone = resolveUserTimezone(configuredTimezone);
+export function buildTemporalContextText(params: {
+  configuredTimezone?: string;
+  sessionStatusAvailable: boolean;
+}): string {
+  const userTimezone = resolveUserTimezone(params.configuredTimezone);
   return buildTemporalContextSection({
-    userDate: formatDateStamp(nowMs, userTimezone),
+    userDate: formatDateStamp(Date.now(), userTimezone),
     userTimezone,
-    sessionStatusAvailable: false,
+    sessionStatusAvailable: params.sessionStatusAvailable,
   })
     .join("\n")
     .trimEnd();
