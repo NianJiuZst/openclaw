@@ -196,10 +196,12 @@ async function resolveBackupPlanFromPaths(params: {
   const configInsideState = params.configInsideState ?? false;
   const oauthInsideState = params.oauthInsideState ?? false;
   const canonicalStateDir = await canonicalizePathForContainment(stateDir);
+  const containmentConfigPath = await canonicalizePathForContainment(configPath);
+  const containmentOauthDir = await canonicalizePathForContainment(oauthDir);
   const inventory = await createBackupResourceInventory({
     stateDir: canonicalStateDir,
-    configPath: await canonicalizePathForContainment(configPath),
-    oauthDir: await canonicalizePathForContainment(oauthDir),
+    configPath: containmentConfigPath,
+    oauthDir: containmentOauthDir,
     workspaceDirs: await Promise.all(
       workspaceDirs.map((workspaceDir) => canonicalizePathForContainment(workspaceDir)),
     ),
@@ -265,10 +267,13 @@ async function resolveBackupPlanFromPaths(params: {
 
   const rawCandidates: Array<Pick<BackupAssetCandidate, "kind" | "sourcePath">> = [
     { kind: "state", sourcePath: path.resolve(stateDir) },
-    ...(configInsideState
+    // Lexical in-state config/credentials can still resolve outside state,
+    // such as a Nix store symlink. Canonical coverage keeps those targets as
+    // declared assets instead of omitting them.
+    ...(configInsideState && isPathWithin(containmentConfigPath, canonicalStateDir)
       ? []
       : [{ kind: "config" as const, sourcePath: path.resolve(configPath) }]),
-    ...(oauthInsideState
+    ...(oauthInsideState && isPathWithin(containmentOauthDir, canonicalStateDir)
       ? []
       : [{ kind: "credentials" as const, sourcePath: path.resolve(oauthDir) }]),
     ...workspaceDirs.map((workspaceDir) => ({

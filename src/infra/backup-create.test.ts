@@ -2978,6 +2978,70 @@ describe("createBackupArchive", () => {
     },
   );
 
+  it.each([
+    { label: "direct", hops: 1 },
+    { label: "chained", hops: 2 },
+  ])(
+    "archives a $label absolute config symlink whose real target is a declared asset",
+    async ({ hops }) => {
+      if (process.platform === "win32") {
+        return;
+      }
+
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-declared-config-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputPath = state.path("declared-config-symlink.tar.gz");
+          const externalConfigPath = state.path("nix-store", "openclaw-default.json");
+          await fs.mkdir(path.dirname(externalConfigPath), { recursive: true });
+          await fs.rename(state.configPath, externalConfigPath);
+          let linkTarget = externalConfigPath;
+          if (hops > 1) {
+            const intermediatePath = state.path("nix-store", "openclaw-link.json");
+            await fs.symlink(externalConfigPath, intermediatePath);
+            linkTarget = intermediatePath;
+          }
+          await fs.symlink(linkTarget, state.configPath);
+          const canonicalExternalConfigPath = await fs.realpath(externalConfigPath);
+
+          const result = await createBackupArchive({
+            output: outputPath,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 8, 2, 13, 0, 0),
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          const configLink = expectDefined(
+            entries.find((entry) => entry.path.endsWith("/state/openclaw.json")),
+            "archived config symlink",
+          );
+          const externalConfigEntry = expectDefined(
+            entries.find((entry) => entry.path.endsWith("/nix-store/openclaw-default.json")),
+            "archived external config target",
+          );
+
+          expect(configLink.type).toBe("SymbolicLink");
+          expect(configLink.linkpath).toBe(
+            path.posix.relative(path.posix.dirname(configLink.path), externalConfigEntry.path),
+          );
+          expect(result.assets).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ kind: "config", sourcePath: canonicalExternalConfigPath }),
+            ]),
+          );
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          await expect(
+            backupVerifyCommand(runtime, { archive: result.archivePath }),
+          ).resolves.toMatchObject({ ok: true });
+        },
+      );
+    },
+  );
+
   it("skips managed absolute runtime symlinks while preserving adjacent state", async () => {
     if (process.platform === "win32") {
       return;

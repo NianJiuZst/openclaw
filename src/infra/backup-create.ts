@@ -1,4 +1,5 @@
 // Creates backup archives while filtering volatile runtime state.
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -341,6 +342,41 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
+function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
+  linkpath: string | undefined;
+  archiveEntryPath: string;
+  assets: readonly BackupAsset[];
+}): string | undefined {
+  if (!params.linkpath || !path.isAbsolute(params.linkpath)) {
+    return params.linkpath;
+  }
+  // tar supplies the first-hop readlink, while declared assets use the final
+  // realpath. Canonicalize before containment so a configured multi-hop
+  // absolute link still maps onto its declared asset; undeclared targets stay
+  // absolute and fail closed at the archive guard.
+  let canonicalTarget: string;
+  try {
+    canonicalTarget = realpathSync(params.linkpath);
+  } catch {
+    return params.linkpath;
+  }
+  const targetAsset = params.assets.find((asset) =>
+    isPathWithin(canonicalTarget, asset.sourcePath),
+  );
+  if (!targetAsset) {
+    return params.linkpath;
+  }
+  const targetAssetRelativePath = path
+    .relative(targetAsset.sourcePath, canonicalTarget)
+    .split(path.sep)
+    .join(path.posix.sep);
+  const targetArchivePath =
+    targetAssetRelativePath === "" || targetAssetRelativePath === "."
+      ? targetAsset.archivePath
+      : path.posix.join(targetAsset.archivePath, targetAssetRelativePath);
+  return path.posix.relative(path.posix.dirname(params.archiveEntryPath), targetArchivePath);
+}
+
 function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").ReadEntry): boolean {
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
 }
@@ -582,6 +618,11 @@ export async function createBackupArchive(
                   });
                   if (entry.type === "SymbolicLink" && !archiveSymlinkViolation) {
                     try {
+                      entry.linkpath = remapDeclaredAbsoluteSymbolicLinkTarget({
+                        linkpath: entry.linkpath,
+                        archiveEntryPath,
+                        assets: result.assets,
+                      });
                       assertArchiveSymbolicLinkTarget({
                         archiveRoot,
                         entryPath: archiveEntryPath,
