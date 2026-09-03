@@ -283,6 +283,7 @@ final class ChannelsStore {
 
     var whatsappLoginMessage: String?
     var whatsappLoginQrDataUrl: String?
+    var whatsappLoginSessionKey: String?
     var whatsappLoginConnected: Bool?
     var whatsappBusy = false
     var telegramBusy = false
@@ -300,7 +301,10 @@ final class ChannelsStore {
     var configSchemaReloadPending = false
     var configLoading = false
     var configLoadingSourceKey: String?
-    var configForceReloadPending = false
+    /// Coalesced re-load request while a config fetch is in flight: `refresh`
+    /// refetches without overwriting a dirty local draft; `force` overwrites it.
+    enum ConfigReloadRequest { case none, refresh, force }
+    var configReloadPending: ConfigReloadRequest = .none
     var configDraft: [String: Any] = [:]
     var configDirty = false
 
@@ -308,6 +312,7 @@ final class ChannelsStore {
     let isPreview: Bool
     var startCount = 0
     var pollTask: Task<Void, Never>?
+    var gatewayPushTask: Task<Void, Never>?
     var configRoot: [String: Any] = [:]
     var configLoaded = false
     var configSourceKey: String?
@@ -369,6 +374,9 @@ final class ChannelsStore {
     func applyWhatsAppLoginWaitResult(_ result: WhatsAppLoginWaitResult) {
         self.whatsappLoginMessage = result.message
         self.whatsappLoginConnected = result.connected
+        if result.connected {
+            self.whatsappLoginSessionKey = nil
+        }
         if let qrDataUrl = result.qrDataUrl {
             self.whatsappLoginQrDataUrl = qrDataUrl
         } else if result.connected {

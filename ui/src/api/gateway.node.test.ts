@@ -205,7 +205,7 @@ type ConnectFrame = {
   };
 };
 
-const REQUEST_FRAME_ID = "00000000-0000-4000-8000-000000000000";
+const REQUEST_FRAME_ID = "2:00000000-0000-4000-8000-000000000000";
 
 function requestFrameBytes(method: string, params?: unknown): number {
   const frame =
@@ -481,6 +481,59 @@ describe("GatewayBrowserClient", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not publish hello when a response observer closes the browser socket", async () => {
+    useNodeFakeTimers();
+    const onHello = vi.fn();
+    const onClose = vi.fn();
+    const onConnectTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onHello,
+      onClose,
+      onConnectTiming,
+      onRequestTiming: ({ method }) => {
+        if (method === "connect") {
+          client.forceReconnect("response observer closed");
+        }
+      },
+    });
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: { role: "operator", deviceToken: "late-device-token", scopes: [] },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ws.lastClose).toEqual({ code: 4000, reason: "response observer closed" });
+      expect(onHello).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.token).toBe(
+        STORED_CRED,
+      );
+      expect(connectTimingPayloads(onConnectTiming).some(({ phase }) => phase === "hello")).toBe(
+        false,
+      );
+      ws.emitClose(4000, "response observer closed");
+      expect(onClose).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: 4000,
+          reason: "response observer closed",
+          willRetry: true,
+        }),
+      );
+      expect(connectTimingPayloads(onConnectTiming).at(-1)?.phase).toBe("failed");
+      await vi.advanceTimersByTimeAsync(800);
+      expect(getLatestWebSocket()).not.toBe(ws);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("requests full control ui operator scopes with explicit shared auth", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -499,11 +552,36 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.APPROVALS,
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
       GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
+      GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("uses native client metadata and its existing operator scope grant", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      clientName: "openclaw-ios",
+      mode: "ui",
+      platform: "iOS 27.0.0",
+      deviceFamily: "iPhone",
+      instanceId: "ios-installation",
+      scopes: ["operator.read", "operator.write"],
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.client).toMatchObject({
+      id: "openclaw-ios",
+      mode: "ui",
+      platform: "iOS 27.0.0",
+      deviceFamily: "iPhone",
+      instanceId: "ios-installation",
+    });
+    expect(connectFrame.params?.scopes).toEqual(["operator.read", "operator.write"]);
   });
 
   it("surfaces build identity rejection and never retries without build identity", async () => {
@@ -684,7 +762,8 @@ describe("GatewayBrowserClient", () => {
     const { connectFrame } = await startConnect(client);
 
     expect(connectFrame.method).toBe("connect");
-    expect(connectFrame.params?.auth?.token).toBe("bootstrap-device-token");
+    expect(connectFrame.params?.auth?.token).toBeUndefined();
+    expect(connectFrame.params?.auth?.deviceToken).toBe("bootstrap-device-token");
     expect(connectFrame.params?.scopes).toEqual([
       "operator.approvals",
       "operator.read",
@@ -981,7 +1060,7 @@ describe("GatewayBrowserClient", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("reports failed request timing without including request params", async () => {
+  it("retains negative response payloads without leaking them into timing or error JSON", async () => {
     const onRequestTiming = vi.fn();
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -1010,17 +1089,36 @@ describe("GatewayBrowserClient", () => {
       type: "res",
       id: frame.id,
       ok: false,
-      error: { code: "CONFIG_ERROR", message: "config failed" },
+      payload: { runId: "browser-run", privateResult: "not-for-logs" },
+      error: {
+        code: "CONFIG_ERROR",
+        message: "config failed",
+        details: { reason: "busy" },
+        retryable: true,
+        retryAfterMs: 250,
+      },
     });
 
     try {
       await request;
       throw new Error("expected config.get request to reject");
     } catch (error) {
-      expect((error as { gatewayCode?: string }).gatewayCode).toBe("CONFIG_ERROR");
+      expect(error).toBeInstanceOf(GatewayRequestError);
+      expect(error).toMatchObject({
+        name: "GatewayRequestError",
+        code: "CONFIG_ERROR",
+        gatewayCode: "CONFIG_ERROR",
+        message: "config failed",
+        details: { reason: "busy" },
+        retryable: true,
+        retryAfterMs: 250,
+        responsePayload: { runId: "browser-run", privateResult: "not-for-logs" },
+      });
+      expect(JSON.stringify(error)).not.toContain("not-for-logs");
     }
     expect(onRequestTiming).toHaveBeenCalledTimes(1);
     expect(requireFirstMockArg(onRequestTiming, "request timing")).not.toHaveProperty("params");
+    expect(JSON.stringify(onRequestTiming.mock.calls)).not.toContain("not-for-logs");
     expectLatestRequestTiming(onRequestTiming, {
       id: frame.id,
       method: "config.get",
@@ -1679,7 +1777,7 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.id).toBe("req-insecure");
+    expect(connectFrame.id).toBe("1:req-insecure");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth).toEqual({
       token: "shared-auth-token",
@@ -1699,7 +1797,7 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.id).toBe("req-insecure");
+    expect(connectFrame.id).toBe("1:req-insecure");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth).toEqual({
       token: undefined,
@@ -1719,7 +1817,8 @@ describe("GatewayBrowserClient", () => {
 
     expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
-    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
+    expect(connectFrame.params?.auth?.token).toBeUndefined();
+    expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
     const [privateKey, signedPayload] = requireFirstSignCall();
     expect(privateKey).toBe("private-key");
     expectSignedPayloadFields(signedPayload, {
@@ -1771,7 +1870,6 @@ describe("GatewayBrowserClient", () => {
     const nextClient = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
     const { connectFrame } = await startConnect(nextClient);
     expect(connectFrame.params?.auth).toMatchObject({
-      token: "replacement-device-token",
       deviceToken: "replacement-device-token",
     });
     nextClient.stop();
@@ -1821,7 +1919,7 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.params?.auth?.token).toBe(STORED_CRED);
+    expect(connectFrame.params?.auth?.deviceToken).toBe(STORED_CRED);
   });
 
   it("migrates the legacy device token store to the first gateway opened after upgrade", async () => {
@@ -1835,7 +1933,7 @@ describe("GatewayBrowserClient", () => {
     });
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.params?.auth?.token).toBe(STORED_CRED);
+    expect(connectFrame.params?.auth?.deviceToken).toBe(STORED_CRED);
     expect(localStorage.getItem(LEGACY_DEVICE_AUTH_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(DEFAULT_DEVICE_AUTH_STORAGE_KEY)).toBe(legacyStore);
   });
@@ -1861,14 +1959,14 @@ describe("GatewayBrowserClient", () => {
       url: "wss://gateway.example/rosita",
     });
     const { connectFrame: rositaConnect } = await startConnect(rositaClient);
-    expect(rositaConnect.params?.auth?.token).toBe(ROSITA_CRED);
+    expect(rositaConnect.params?.auth?.deviceToken).toBe(ROSITA_CRED);
     rositaClient.stop();
 
     const wilfredClient = new GatewayBrowserClient({
       url: "wss://gateway.example/wilfred",
     });
     const { connectFrame: wilfredConnect } = await startConnect(wilfredClient, "nonce-2");
-    expect(wilfredConnect.params?.auth?.token).toBe(WILFRED_CRED);
+    expect(wilfredConnect.params?.auth?.deviceToken).toBe(WILFRED_CRED);
     wilfredClient.stop();
   });
 
@@ -1893,14 +1991,14 @@ describe("GatewayBrowserClient", () => {
       url: "wss://gateway.example/control?tenant=a",
     });
     const { connectFrame: tenantAConnect } = await startConnect(tenantAClient);
-    expect(tenantAConnect.params?.auth?.token).toBe(TENANT_A_CRED);
+    expect(tenantAConnect.params?.auth?.deviceToken).toBe(TENANT_A_CRED);
     tenantAClient.stop();
 
     const tenantBClient = new GatewayBrowserClient({
       url: "wss://gateway.example/control?tenant=b",
     });
     const { connectFrame: tenantBConnect } = await startConnect(tenantBClient, "nonce-2");
-    expect(tenantBConnect.params?.auth?.token).toBe(TENANT_B_CRED);
+    expect(tenantBConnect.params?.auth?.deviceToken).toBe(TENANT_B_CRED);
     tenantBClient.stop();
   });
 
@@ -2339,7 +2437,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws, connectFrame } = await startConnect(client);
-    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
+    expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
 
     ws.emitMessage({
       type: "res",
@@ -2374,7 +2472,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws, connectFrame } = await startConnect(client);
-    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
+    expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
 
     ws.emitMessage({
       type: "res",

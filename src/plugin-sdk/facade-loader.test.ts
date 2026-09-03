@@ -6,7 +6,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadFacadeModuleAtLocationSync,
@@ -236,12 +238,17 @@ describe("plugin-sdk facade loader", () => {
       await import("./bundled-channel-config-schema.js");
 
     expect(listImportedBundledPluginFacadeIds()).toEqual([]);
-    expect(TelegramConfigSchema.safeParse({ dmPolicy: "pairing" }).success).toBe(true);
+    type ChannelConfig = NonNullable<OpenClawConfig["channels"]>;
+    const telegramResult: z.ZodSafeParseResult<NonNullable<ChannelConfig["telegram"]>> =
+      TelegramConfigSchema.safeParse({ dmPolicy: "pairing" });
+    expect(telegramResult.success).toBe(true);
     const extended = TelegramConfigSchema.safeExtend({ testOnly: z.literal(true) });
     expect(extended.safeParse({ dmPolicy: "pairing", testOnly: true }).success).toBe(true);
     expect(listImportedBundledPluginFacadeIds()).toEqual(["telegram"]);
 
-    expect(IMessageConfigSchema.safeParse({ dmPolicy: "pairing" }).success).toBe(true);
+    const imessageResult: z.ZodSafeParseResult<NonNullable<ChannelConfig["imessage"]>> =
+      IMessageConfigSchema.safeParse({ dmPolicy: "pairing" });
+    expect(imessageResult.success).toBe(true);
     expect(listImportedBundledPluginFacadeIds()).toEqual(["imessage", "telegram"]);
   });
 
@@ -369,6 +376,34 @@ describe("plugin-sdk facade loader", () => {
     expect(first.marker).toBe("identity-check");
     expect(listImportedBundledPluginFacadeIds()).toEqual([fixture.pluginId]);
     expect(listImportedFacadeRuntimeIds()).toEqual([fixture.pluginId]);
+  });
+
+  it("reloads replaced facade artifacts and dependencies without erasing imported-plugin history", () => {
+    const pluginRoot = fs.realpathSync(createTempDirSync("openclaw-facade-replacement-"));
+    const modulePath = path.join(pluginRoot, "api.js");
+    const dependencyPath = path.join(pluginRoot, "dependency.js");
+    fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
+
+    const writeArtifact = (marker: string) => {
+      fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
+      fs.writeFileSync(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
+    };
+    const loadArtifact = () =>
+      loadFacadeModuleAtLocationSync<{ marker: string }>({
+        location: { modulePath, boundaryRoot: pluginRoot },
+        trackedPluginId: "replacement-plugin",
+      }).marker;
+
+    writeArtifact("retired");
+    expect(loadArtifact()).toBe("retired");
+
+    writeArtifact("replacement");
+    expect(loadArtifact()).toBe("retired");
+
+    clearPluginMetadataLifecycleCaches();
+
+    expect(listImportedBundledPluginFacadeIds()).toContain("replacement-plugin");
+    expect(loadArtifact()).toBe("replacement");
   });
 
   it("uses native require for Windows dist facade loads", () => {

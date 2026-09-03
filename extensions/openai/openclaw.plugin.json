@@ -1,7 +1,15 @@
 {
   "id": "openai",
+  "sessionRouteStateOwners": [
+    {
+      "id": "openai",
+      "label": "OpenAI",
+      "providerIds": ["openai"],
+      "authProfilePrefixes": ["openai:"]
+    }
+  ],
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "enabledByDefault": true,
   "providers": ["openai"],
@@ -199,6 +207,7 @@
     {
       "provider": "openai",
       "method": "oauth",
+      "personalAccount": true,
       "choiceId": "openai",
       "appGuidedAuth": "oauth",
       "choiceLabel": "ChatGPT Login",
@@ -212,12 +221,12 @@
     {
       "provider": "openai",
       "method": "device-code",
+      "personalAccount": true,
       "choiceId": "openai-device-code",
       "appGuidedAuth": "device-code",
       "choiceLabel": "ChatGPT Device Pairing",
       "choiceHint": "Pair your ChatGPT account in browser with a device code",
       "assistantPriority": -10,
-      "assistantVisibility": "manual-only",
       "groupId": "openai",
       "groupLabel": "OpenAI",
       "groupHint": "ChatGPT/Codex sign-in or API key"
@@ -225,6 +234,7 @@
     {
       "provider": "openai",
       "method": "api-key",
+      "personalAccount": true,
       "choiceId": "openai-api-key",
       "appGuidedSecret": true,
       "choiceLabel": "OpenAI API Key",

@@ -28,15 +28,19 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     unavailableGatewayMethods,
     sessionCompanion,
     sessionObserver,
+    mentionInbox,
     getMcpAppSandboxPort,
     ensureSandboxHostPort,
     getPortalService,
     terminalLaunchPolicy,
     execApprovalManager,
+    questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
+    approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
+    placementStandingGrants,
     systemAgentApprovalManager,
     bindApprovalPublicationContext,
     validateAgentRuntimeApprovalAuthority,
@@ -123,19 +127,25 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       runtimeState,
       sessionCompanion,
       getRuntimeConfig,
+      isConfigReloadSettled: () =>
+        !lifecycle.closePreludeStarted && runtimeState.configReloader.isConfigReloadSettled(),
       getGatewayMethodRegistry: getAttachedGatewayMethodRegistry,
       gatewayTlsFingerprint: gatewayTls.enabled ? gatewayTls.fingerprintSha256 : undefined,
       sessionObserver,
+      mentionInbox,
       getMcpAppSandboxPort,
       ensureSandboxHostPort,
       getPortalService,
       resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
       isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       execApprovalManager,
+      questionManager,
       cancelRunBoundApprovals,
       forwardPluginApprovalRequest,
+      approvalWebPushDelivery,
       pluginApprovalIosPushDelivery,
       pluginApprovalManager,
+      placementStandingGrants,
       systemAgentApprovalManager,
       listSessionPendingApprovals: approvalSessionEvents.replay,
       loadGatewayModelCatalog,
@@ -177,7 +187,10 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
         : {}),
       ...(workerPlacementRuntime
-        ? { workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace }
+        ? {
+            workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace,
+            workerPlacementRunnerAvailabilityReader: workerPlacementRuntime.runnerAvailability,
+          }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }
@@ -234,6 +247,13 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     sidecars: runtimeState.gatewayLifetimeSidecars,
   });
   pluginGatewayContext.current = gatewayRequestContext;
+  gatewayRequestContext.dispatchHookAgentTurn = async (pluginId, hookParams) => {
+    const transport = runtime.transportBridge.current();
+    if (!transport) {
+      throw new Error("Gateway listener must start before plugin hook dispatch");
+    }
+    return await transport.dispatchHookAgentTurn(pluginId, hookParams);
+  };
   const { createGatewayInstanceRuntime } = await import("./server-instance-runtime.js");
   const gatewayInstanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,
@@ -246,6 +266,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
+  gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;
   return { ...runtime, chatMetadataLifecycle, gatewayRequestContext, gatewayInstanceRuntime };
 }
 
