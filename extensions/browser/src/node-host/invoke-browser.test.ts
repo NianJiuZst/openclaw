@@ -463,6 +463,7 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("retains staged copies when the timeout wins before dispatch settles", async () => {
+    vi.useFakeTimers();
     const now = vi.spyOn(Date, "now").mockReturnValue(0);
     const staged = stagedReportUpload;
     uploadMocks.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
@@ -473,7 +474,7 @@ describe("runBrowserProxyCommand", () => {
         body: { running: true, cdpReady: true, cdpHttp: true },
       });
 
-    await expect(
+    const result = expect(
       runBrowserProxyCommand(
         JSON.stringify({
           method: "POST",
@@ -487,9 +488,9 @@ describe("runBrowserProxyCommand", () => {
         }),
         "browser.proxy.upload.v1",
       ),
-    )
-      .rejects.toThrow("browser proxy timed out")
-      .finally(() => now.mockRestore());
+    ).rejects.toThrow("browser proxy timed out");
+    await vi.advanceTimersByTimeAsync(10_000);
+    await result.finally(() => now.mockRestore());
 
     expect(uploadMocks.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
   });
@@ -735,7 +736,7 @@ describe("runBrowserProxyCommand", () => {
     ).rejects.toThrow(
       /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=openclaw; status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=http:\/\/127\.0\.0\.1:18792\)/,
     );
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(10_000);
     await result;
   });
 
@@ -768,7 +769,7 @@ describe("runBrowserProxyCommand", () => {
     ).rejects.toThrow(
       /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=user; status\(running=true, cdpHttp=true, cdpReady=false, transport=chrome-mcp\)/,
     );
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(10_000);
     await result;
   });
 
@@ -801,8 +802,32 @@ describe("runBrowserProxyCommand", () => {
     ).rejects.toThrow(
       /status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=https:\/\/example\.com\/chrome\?token=supers…7890\)/,
     );
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(10_000);
     await result;
+  });
+
+  it("returns a late omitted-timeout navigation instead of a generic proxy timeout", async () => {
+    vi.useFakeTimers();
+    dispatcherMocks.dispatch.mockImplementationOnce(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20_000);
+      });
+      return { status: 200, body: { ok: true, url: "https://example.org/" } };
+    });
+
+    const pending = runBrowserProxyCommand(
+      JSON.stringify({
+        method: "POST",
+        path: "/navigate",
+        profile: "imported",
+        body: { url: "https://example.org/", targetId: "t2" },
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(pending).resolves.toBe(
+      JSON.stringify({ result: { ok: true, url: "https://example.org/" } }),
+    );
   });
 
   it.each([
