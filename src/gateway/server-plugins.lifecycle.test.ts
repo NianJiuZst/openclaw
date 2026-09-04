@@ -29,7 +29,7 @@ import {
   type ChannelBindingProof,
   type InstanceBindingProbeCoordinator,
   type InstanceBindingProbeResult,
-} from "./server-plugins.lifecycle.fixtures.js";
+} from "./server-plugins.lifecycle.test-fixtures.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   connectWebchatClient,
