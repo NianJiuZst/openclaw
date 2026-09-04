@@ -25,6 +25,26 @@ import {
   parseSent,
 } from "./realtime-quicksilver.test-helpers.js";
 
+type LibopusModule = typeof import("libopus-wasm");
+type LibopusDecoder = Awaited<ReturnType<LibopusModule["createDecoder"]>>;
+type LibopusEncoder = Awaited<ReturnType<LibopusModule["createEncoder"]>>;
+
+const libopusFactoryOverrides = vi.hoisted(() => ({
+  createDecoder: undefined as LibopusModule["createDecoder"] | undefined,
+  createEncoder: undefined as LibopusModule["createEncoder"] | undefined,
+}));
+
+vi.mock("libopus-wasm", async (importOriginal) => {
+  const actual = await importOriginal<LibopusModule>();
+  return {
+    ...actual,
+    createDecoder: (...args: Parameters<LibopusModule["createDecoder"]>) =>
+      (libopusFactoryOverrides.createDecoder ?? actual.createDecoder)(...args),
+    createEncoder: (...args: Parameters<LibopusModule["createEncoder"]>) =>
+      (libopusFactoryOverrides.createEncoder ?? actual.createEncoder)(...args),
+  };
+});
+
 function createRelayTone(): Buffer {
   const pcm = Buffer.alloc(480 * 2);
   for (let index = 0; index < 480; index += 1) {
@@ -229,7 +249,11 @@ describe("GPT-Live werift audio peer", () => {
 
       expect(decodeOrder).toEqual([20, "plc", 22, 23, 24, 25]);
       expect(decodePacketLoss).toHaveBeenCalledWith(960);
-      expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(6 * 480 * 2);
+      // The centered streaming filter retains seven 24 kHz samples of right-edge
+      // context until the next packet instead of fabricating a boundary per packet.
+      expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(
+        (6 * 480 - 7) * 2,
+      );
       expect(onError).not.toHaveBeenCalled();
     } finally {
       peer.close();
@@ -503,24 +527,15 @@ describe("GPT-Live werift audio peer", () => {
 
   it("releases the encoder and peer when decoder initialization fails", async () => {
     const encoder = { free: vi.fn() };
-    vi.doMock("libopus-wasm", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("libopus-wasm")>();
-      return {
-        ...actual,
-        createEncoder: vi.fn(async () => encoder),
-        createDecoder: vi.fn(async () => {
-          throw new Error("decoder init failed");
-        }),
-      };
-    });
-    vi.resetModules();
+    libopusFactoryOverrides.createEncoder = async () => encoder as unknown as LibopusEncoder;
+    libopusFactoryOverrides.createDecoder = async () => {
+      throw new Error("decoder init failed");
+    };
     const { RTCPeerConnection } = await import("werift");
     const closePeer = vi.spyOn(RTCPeerConnection.prototype, "close");
     try {
-      const { OpenAIQuicksilverAudioPeer: ReloadedPeer } =
-        await import("./realtime-quicksilver-peer.runtime.js");
       await expect(
-        ReloadedPeer.create({
+        OpenAIQuicksilverAudioPeer.create({
           callbacks: { onAudio: vi.fn(), onError: vi.fn() },
           iceServers: [],
         }),
@@ -529,8 +544,8 @@ describe("GPT-Live werift audio peer", () => {
       expect(closePeer).toHaveBeenCalled();
     } finally {
       closePeer.mockRestore();
-      vi.doUnmock("libopus-wasm");
-      vi.resetModules();
+      libopusFactoryOverrides.createEncoder = undefined;
+      libopusFactoryOverrides.createDecoder = undefined;
     }
   });
 
@@ -544,22 +559,14 @@ describe("GPT-Live werift audio peer", () => {
           resolveDecoder = resolve;
         }),
     );
-    vi.doMock("libopus-wasm", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("libopus-wasm")>();
-      return {
-        ...actual,
-        createEncoder: vi.fn(async () => encoder),
-        createDecoder,
-      };
-    });
-    vi.resetModules();
+    libopusFactoryOverrides.createEncoder = async () => encoder as unknown as LibopusEncoder;
+    libopusFactoryOverrides.createDecoder = async () =>
+      (await createDecoder()) as unknown as LibopusDecoder;
     const { RTCPeerConnection } = await import("werift");
     const closePeer = vi.spyOn(RTCPeerConnection.prototype, "close");
     const controller = new AbortController();
     try {
-      const { OpenAIQuicksilverAudioPeer: ReloadedPeer } =
-        await import("./realtime-quicksilver-peer.runtime.js");
-      const creation = ReloadedPeer.create({
+      const creation = OpenAIQuicksilverAudioPeer.create({
         callbacks: { onAudio: vi.fn(), onError: vi.fn() },
         iceServers: [],
         signal: controller.signal,
@@ -574,8 +581,8 @@ describe("GPT-Live werift audio peer", () => {
       expect(encoder.free).toHaveBeenCalledOnce();
     } finally {
       closePeer.mockRestore();
-      vi.doUnmock("libopus-wasm");
-      vi.resetModules();
+      libopusFactoryOverrides.createEncoder = undefined;
+      libopusFactoryOverrides.createDecoder = undefined;
     }
   });
 });
@@ -854,11 +861,17 @@ describe("GPT-Live gateway relay bridge", () => {
       close: closePeer,
     };
     const runAgentConsult = vi.fn(async () => ({ text: "Delegated result" }));
+    const handleDelegationInput = vi.fn((text: string): "control" | "consult" =>
+      text === "Status?" ? "control" : "consult",
+    );
     const onAudio = vi.fn();
     const onClearAudio = vi.fn();
     const onEvent = vi.fn();
     const onReady = vi.fn();
     const onClose = vi.fn();
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      createCallResponse("v=answer\r\n", "rtc_bridge"),
+    );
     const bridge = new OpenAIQuicksilverGatewayBridge({
       providerConfig: {},
       model: "gpt-live-1-codex",
@@ -870,6 +883,7 @@ describe("GPT-Live gateway relay bridge", () => {
       onEvent,
       onReady,
       onClose,
+      handleDelegationInput,
       runAgentConsult,
       logger: { debug: vi.fn(), warn: vi.fn() },
       resolveAuth: vi.fn(async () => ({
@@ -878,7 +892,7 @@ describe("GPT-Live gateway relay bridge", () => {
         accountId: "account-1",
       })),
       createPeer: vi.fn(async () => peer),
-      fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_bridge")),
+      fetchImpl,
       webSocketFactory: () => {
         socket = new FakeSocket();
         return socket;
@@ -890,6 +904,12 @@ describe("GPT-Live gateway relay bridge", () => {
       throw new Error("expected sideband socket");
     }
     const connectedSocket = socket;
+    const body = fetchImpl.mock.calls[0]?.[1]?.body;
+    if (typeof body !== "string") {
+      throw new Error("Expected initial call JSON");
+    }
+    expect(JSON.parse(body).session.delegation).toEqual({ type: "client", ack_filler: false });
+    expect(JSON.parse(body).session.instructions).toContain("Wait for the host control result");
     expect(createOffer).toHaveBeenCalledOnce();
     expect(applyAnswer).toHaveBeenCalledWith("v=answer\r\n");
     expect(adoptPendingAudio).not.toHaveBeenCalled();
@@ -898,6 +918,14 @@ describe("GPT-Live gateway relay bridge", () => {
       session: { id: "rtc_bridge", expires_at: Math.floor(Date.now() / 1000) + 60 },
     });
     expect(onReady).toHaveBeenCalledOnce();
+    bridge.sendUserMessage("Ready for the next task");
+    expect(parseSent(connectedSocket)).toEqual([
+      {
+        type: "session.context.append",
+        channel: "speakable",
+        content: [{ type: "input_text", text: "Ready for the next task" }],
+      },
+    ]);
 
     emitSideband(connectedSocket, { type: "output_audio.delta", delta: "ignored-media-copy" });
     expect(onEvent).toHaveBeenCalledWith({ direction: "server", type: "output_audio.delta" });
@@ -905,6 +933,19 @@ describe("GPT-Live gateway relay bridge", () => {
 
     emitSideband(connectedSocket, { type: "output_audio_buffer.cleared" });
     expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+
+    emitSideband(connectedSocket, {
+      type: "delegation.created",
+      item: {
+        type: "delegation",
+        target: "client",
+        id: "status-control",
+        content: [{ type: "input_text", text: "Status?" }],
+      },
+    });
+    expect(handleDelegationInput).toHaveBeenCalledExactlyOnceWith("Status?", expect.any(Function));
+    expect(runAgentConsult).not.toHaveBeenCalled();
+    expect(connectedSocket.sent).toHaveLength(1);
 
     emitSideband(connectedSocket, {
       type: "delegation.created",
@@ -924,6 +965,10 @@ describe("GPT-Live gateway relay bridge", () => {
         content: [{ type: "input_text", text: "Delegated result" }],
       }),
     );
+    expect(
+      parseSent(connectedSocket).filter((event) => event.type === "session.context.append"),
+    ).toHaveLength(2);
+    expect(connectedSocket.sent[1]).toContain("I’ll check that request.");
 
     bridge.close();
     expect(closePeer).toHaveBeenCalledOnce();

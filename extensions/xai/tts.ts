@@ -1,4 +1,5 @@
 // Xai plugin module implements tts behavior.
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -9,7 +10,7 @@ import {
 import { trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
@@ -41,7 +42,7 @@ export async function listXaiTtsVoices(params: {
       },
     },
     timeoutMs: XAI_TTS_VOICE_LIST_TIMEOUT_MS,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     auditContext: "xai tts voices",
   });
   try {
@@ -257,7 +258,7 @@ export async function xaiTTSStream(params: {
         },
       });
     } catch (error) {
-      failConnect(error instanceof Error ? error : new Error(String(error)));
+      failConnect(toStringifiedError(error));
       return;
     }
 
@@ -276,7 +277,7 @@ export async function xaiTTSStream(params: {
     });
 
     ws.once("error", (error) => {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized = toStringifiedError(error);
       if (connectSettled) {
         failStream(normalized);
         return;
@@ -373,7 +374,7 @@ export async function xaiTTSStream(params: {
           const payload = rawDataToString(data);
           handleServerEvent(JSON.parse(payload) as XaiTtsStreamServerEvent);
         } catch (error) {
-          failStream(error instanceof Error ? error : new Error(String(error)));
+          failStream(toStringifiedError(error));
         }
       });
 
@@ -407,7 +408,7 @@ export async function xaiTTSStream(params: {
         }
         ws?.send(JSON.stringify({ type: "text.done" }));
       } catch (error) {
-        failStream(error instanceof Error ? error : new Error(String(error)));
+        failStream(toStringifiedError(error));
       }
 
       resolve({ audioStream: wiredStream, release });
@@ -462,18 +463,17 @@ export async function xaiTTS(params: {
     },
     timeoutMs,
     fetchFn: fetch,
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(ttsBaseUrl),
     auditContext: "xai tts",
   });
   try {
     await assertOkOrThrowProviderError(response, "xAI TTS API error");
 
-    return Buffer.from(
-      await readProviderBinaryResponse(response, "xAI TTS API error", "audio", {
-        maxBytes,
-        onOverflow: ({ maxBytes: maxBytesLocal }) =>
-          new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
-      }),
-    );
+    return await readProviderBinaryResponse(response, "xAI TTS API error", "audio", {
+      maxBytes,
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
+    });
   } finally {
     await release();
   }

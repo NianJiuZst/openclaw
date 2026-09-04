@@ -13,7 +13,7 @@ import {
   callNodesGatewayCli,
   callNodePairApprovalGatewayCli,
   nodesCallOpts,
-  resolveNodeId,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts, PendingRequest } from "./types.js";
 
@@ -210,14 +210,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("remove", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
-          if (!nodeId) {
-            defaultRuntime.error(
-              `--node is required. Run ${formatCliCommand("openclaw nodes pending")} to choose a node request.`,
-            );
-            defaultRuntime.exit(1);
-            return;
-          }
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const result = await callNodesGatewayCli("node.pair.remove", opts, { nodeId });
           if (opts.json) {
             defaultRuntime.writeJson(result);
@@ -237,15 +230,13 @@ export function registerNodesPairingCommands(nodes: Command) {
       .requiredOption("--name <displayName>", "New display name")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("rename", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const name = normalizeOptionalString(opts.name) ?? "";
-          if (!nodeId || !name) {
-            defaultRuntime.error(
-              `--node and --name are required. Run ${formatCliCommand("openclaw nodes pending")} to choose a node, then rerun with --name <displayName>.`,
+          if (!name) {
+            throw new Error(
+              `--name must not be empty. Run ${formatCliCommand("openclaw nodes list")} to see paired nodes, then rerun with --name <displayName>.`,
             );
-            defaultRuntime.exit(1);
-            return;
           }
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const result = await callNodesGatewayCli("node.rename", opts, {
             nodeId,
             displayName: name,

@@ -15,13 +15,23 @@ import { VERSION } from "../../version.js";
 const runtimeModelAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
   getRuntimeAuthForModelCore: vi.fn(),
-  resolveApiKeyForProvider: vi.fn(),
+  resolveProviderRuntimeApiKey: vi.fn(),
 }));
+const heartbeatRunnerMocks = vi.hoisted(() => ({ loads: 0, runHeartbeatOnce: vi.fn() }));
+vi.mock("../../infra/heartbeat-runner.js", () => {
+  heartbeatRunnerMocks.loads++;
+  return { runHeartbeatOnce: heartbeatRunnerMocks.runHeartbeatOnce };
+});
+
 const sandboxContextMocks = vi.hoisted(() => ({
   resolveSandboxContext: vi.fn(),
 }));
 
-vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
+vi.mock("./runtime-model-auth.runtime.js", () => ({
+  getApiKeyForModel: runtimeModelAuthMocks.getApiKeyForModel,
+  getRuntimeAuthForModelCore: runtimeModelAuthMocks.getRuntimeAuthForModelCore,
+  resolveProviderRuntimeApiKey: runtimeModelAuthMocks.resolveProviderRuntimeApiKey,
+}));
 vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
 
 import { createPluginRuntime } from "./index.js";
@@ -41,6 +51,7 @@ function createCommandResult() {
 
 function createGatewaySubagentRuntime() {
   return {
+    complete: vi.fn(),
     run: vi.fn(),
     waitForRun: vi.fn(),
     getSessionMessages: vi.fn(),
@@ -103,7 +114,7 @@ describe("plugin runtime command execution", () => {
     vi.restoreAllMocks();
     runtimeModelAuthMocks.getApiKeyForModel.mockReset();
     runtimeModelAuthMocks.getRuntimeAuthForModelCore.mockReset();
-    runtimeModelAuthMocks.resolveApiKeyForProvider.mockReset();
+    runtimeModelAuthMocks.resolveProviderRuntimeApiKey.mockReset();
     sandboxContextMocks.resolveSandboxContext.mockReset();
     resetConfigRuntimeState();
   });
@@ -131,6 +142,40 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
     await expectRunCommandOutcome({ runtime, expected, commandResult });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
+  });
+
+  it("defers heartbeat execution and forwards only plugin-safe options", async () => {
+    const system = createPluginRuntime().system;
+    expect(heartbeatRunnerMocks.loads).toBe(0);
+    const result = { status: "skipped", reason: "disabled" };
+    heartbeatRunnerMocks.runHeartbeatOnce.mockResolvedValueOnce(result);
+    await expect(
+      system.runHeartbeatOnce({
+        reason: "plugin-event",
+        agentId: "main",
+        sessionKey: "session",
+        heartbeat: { target: "none", every: "1ms" },
+        cfg: {},
+        deps: {},
+      } as Parameters<typeof system.runHeartbeatOnce>[0]),
+    ).resolves.toBe(result);
+    expect(heartbeatRunnerMocks.loads).toBe(1);
+    expect(heartbeatRunnerMocks.runHeartbeatOnce).toHaveBeenCalledWith({
+      reason: "plugin-event",
+      agentId: "main",
+      sessionKey: "session",
+      heartbeat: { target: "none" },
+    });
+    const failure = new Error("heartbeat failed");
+    heartbeatRunnerMocks.runHeartbeatOnce.mockRejectedValueOnce(failure);
+    await expect(system.runHeartbeatOnce()).rejects.toBe(failure);
+    expect(heartbeatRunnerMocks.runHeartbeatOnce).toHaveBeenLastCalledWith({
+      reason: undefined,
+      agentId: undefined,
+      sessionKey: undefined,
+      heartbeat: undefined,
+    });
+    heartbeatRunnerMocks.runHeartbeatOnce.mockReset();
   });
 
   it.each([
@@ -287,6 +332,7 @@ describe("plugin runtime command execution", () => {
       name: "exposes runtime.mediaUnderstanding helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expectFunctionKeys(runtime.mediaUnderstanding as Record<string, unknown>, [
+          "resolveAudioInputBudget",
           "runFile",
           "describeImageFile",
           "describeImageFileWithModel",
@@ -339,13 +385,12 @@ describe("plugin runtime command execution", () => {
           provider: DEFAULT_PROVIDER,
         });
         expectFunctionKeys(runtime.agent as Record<string, unknown>, [
+          "runCommandFromIngress",
           "runEmbeddedAgent",
-          "runEmbeddedPiAgent",
           "normalizeThinkingLevel",
           "resolveThinkingPolicy",
           "resolveAgentDir",
         ]);
-        expect(runtime.agent.runEmbeddedPiAgent).toBe(runtime.agent.runEmbeddedAgent);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
           "createSessionEntry",
           "getSessionEntry",
@@ -425,7 +470,7 @@ describe("plugin runtime command execution", () => {
       source: "workspace cloud credentials",
       mode: "api-key",
     });
-    runtimeModelAuthMocks.resolveApiKeyForProvider.mockResolvedValue({
+    runtimeModelAuthMocks.resolveProviderRuntimeApiKey.mockResolvedValue({
       apiKey: "provider-key",
       source: "workspace cloud credentials",
       mode: "api-key",
@@ -454,7 +499,7 @@ describe("plugin runtime command execution", () => {
       cfg,
       workspaceDir: "/tmp/workspace",
     });
-    expect(runtimeModelAuthMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
+    expect(runtimeModelAuthMocks.resolveProviderRuntimeApiKey).toHaveBeenCalledWith({
       provider: "workspace-cloud",
       cfg,
       workspaceDir: "/tmp/workspace",
@@ -464,6 +509,14 @@ describe("plugin runtime command execution", () => {
   it("keeps subagent unavailable by default", () => {
     const runtime = createPluginRuntime();
     expectGatewaySubagentRunFailure(runtime, { sessionKey: "s-1", message: "hello" });
+  });
+
+  it("exposes a node duplex capability even when Gateway access is unavailable", () => {
+    const nodes = createPluginRuntime().nodes;
+    expect(nodes).toHaveProperty("openDuplex", expect.any(Function));
+    expect(() => nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).toThrow(
+      "only available inside the Gateway",
+    );
   });
 
   it("uses an explicit subagent runtime", async () => {
@@ -484,6 +537,7 @@ describe("plugin runtime command execution", () => {
     const nodes = {
       list: vi.fn().mockResolvedValue({ nodes: [] }),
       invoke: vi.fn().mockResolvedValue({ ok: true }),
+      openDuplex: vi.fn().mockResolvedValue({ closed: Promise.resolve({ ok: true }) }),
     };
     const runtime = createPluginRuntime({ nodes });
 
@@ -493,5 +547,9 @@ describe("plugin runtime command execution", () => {
     ).resolves.toEqual({ ok: true });
     expect(nodes.list).toHaveBeenCalledWith({ connected: true });
     expect(nodes.invoke).toHaveBeenCalledWith({ nodeId: "node-1", command: "browser.proxy" });
+    await expect(
+      runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" }),
+    ).resolves.toMatchObject({ closed: expect.any(Promise) });
+    expect(nodes.openDuplex).toHaveBeenCalledWith({ nodeId: "node-1", command: "image.bridge" });
   });
 });

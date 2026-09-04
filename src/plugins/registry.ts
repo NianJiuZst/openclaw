@@ -1,5 +1,4 @@
 /** In-memory plugin registry builder and mutation API for plugin runtime registration. */
-import { cleanupPluginRuntimeLifecycles } from "./host-hook-runtime-lifecycle-cleanup.js";
 import { cleanupPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
 import { createPluginApiFactory } from "./registry-api.js";
 import { createPluginRegistrars } from "./registry-registrars.js";
@@ -48,31 +47,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registrationRecordSnapshots.set(record, clonePluginRecord(record));
     return createPluginApi(record, params);
   };
-  const recordCleanupFailures = (
-    kind: string,
-    failures: readonly { pluginId: string; hookId: string }[],
-  ) => {
-    for (const failure of failures) {
-      state.pushDiagnostic({
-        level: "warn",
-        pluginId: failure.pluginId,
-        message: `${kind} cleanup failed during rollback: ${failure.hookId}`,
-      });
-    }
-  };
 
   const rollbackPluginGlobalSideEffects = (pluginId: string, record?: RegistryPluginRecord) => {
     deactivatePluginSideEffectGuards(pluginId);
-    const runtimeLifecycleRecords = state.registry.runtimeLifecycles.filter(
-      (registration) => registration.pluginId === pluginId,
-    );
+    runtimeResolver.revokePluginRuntimeRecord(pluginId, record);
     const schedulerRecords = state.registry.sessionSchedulerJobs.filter(
       (r) => r.pluginId === pluginId,
     );
     const gatewayMethods = state.registry.gatewayMethodDescriptors
       .filter((entry) => entry.owner.kind === "plugin" && entry.owner.pluginId === pluginId)
       .map((entry) => entry.name);
-    for (const value of Object.values(state.registry)) {
+    for (const [registryKey, value] of Object.entries(state.registry)) {
+      // Plugin records and diagnostics are operator-visible load outcomes, not registrations.
+      if (registryKey === "plugins" || registryKey === "diagnostics") {
+        continue;
+      }
       if (Array.isArray(value)) {
         for (let index = value.length - 1; index >= 0; index -= 1) {
           const entry = value[index] as
@@ -109,16 +98,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registrationRecordSnapshots.delete(record);
     }
 
-    // Runtime lifecycle callbacks own resources created synchronously during register().
-    // Run their bounded cleanup after removing the failed registry contributions.
-    if (runtimeLifecycleRecords.length > 0) {
-      void cleanupPluginRuntimeLifecycles({
-        registrations: runtimeLifecycleRecords,
-        pluginId,
-        reason: "disable",
-      }).then(({ failures }) => recordCleanupFailures("runtime lifecycle", failures));
-    }
-
     // Scheduler jobs still have a live process registration; contribution rollback
     // drops registry rows above, then cancels external work created before register threw.
     if (registryParams.activateGlobalSideEffects !== false && schedulerRecords.length > 0) {
@@ -127,7 +106,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         reason: "disable",
         records: schedulerRecords,
         cleanupOwnerRegistry: state.registry,
-      }).then((failures) => recordCleanupFailures("scheduler job", failures));
+      }).then((failures) => {
+        for (const failure of failures) {
+          state.pushDiagnostic({
+            level: "warn",
+            pluginId: failure.pluginId,
+            message: `scheduler job cleanup failed during rollback: ${failure.hookId}`,
+          });
+        }
+      });
     }
   };
 
@@ -139,6 +126,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool: registrars.registerTool,
     registerChannel: registrars.registerChannel,
     registerHostedMediaResolver: registrars.registerHostedMediaResolver,
+    registerWidgetPresenter: registrars.registerWidgetPresenter,
     registerMcpServerConnectionResolver: registrars.registerMcpServerConnectionResolver,
     registerProvider: registrars.registerProvider,
     registerWorkerProvider: registrars.registerWorkerProvider,
@@ -169,6 +157,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTrustedToolPolicy: registrars.registerTrustedToolPolicy,
     registerToolMetadata: registrars.registerToolMetadata,
     registerControlUiDescriptor: registrars.registerControlUiDescriptor,
+    registerBoardWidgetContentKind: registrars.registerBoardWidgetContentKind,
     registerRuntimeLifecycle: registrars.registerRuntimeLifecycle,
     registerAgentEventSubscription: registrars.registerAgentEventSubscription,
     registerSessionSchedulerJob: registrars.registerSessionSchedulerJob,

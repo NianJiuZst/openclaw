@@ -47,17 +47,12 @@ export function shouldDeliverDespiteSourceReplySuppression(
   );
 }
 
-export function readAskUserQuestionId(payload: ReplyPayload): string | undefined {
-  const askUser = payload.channelData?.askUser;
-  if (!isRecord(askUser)) {
-    return undefined;
-  }
-  const questionId = askUser.questionId;
-  return typeof questionId === "string" ? questionId : undefined;
-}
-
 export function hasExecApprovalPayload(payload: ReplyPayload): boolean {
   return isRecord(payload.channelData?.execApproval);
+}
+
+export function hasExecApprovalUnavailablePayload(payload: ReplyPayload): boolean {
+  return isRecord(payload.channelData?.execApprovalUnavailable);
 }
 
 export function hasAskUserPayload(payload: ReplyPayload): boolean {
@@ -68,6 +63,7 @@ export function requiresDurableToolResultDelivery(payload: ReplyPayload): boolea
   return (
     resolveSendableOutboundReplyParts(payload).hasMedia ||
     hasExecApprovalPayload(payload) ||
+    hasExecApprovalUnavailablePayload(payload) ||
     hasAskUserPayload(payload)
   );
 }
@@ -90,6 +86,8 @@ export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): stri
       replyToTag: payload.replyToTag,
       replyToCurrent: payload.replyToCurrent,
       audioAsVoice: payload.audioAsVoice,
+      videoAsNote: payload.videoAsNote === true,
+      location: payload.location,
       spokenText: payload.spokenText,
       ttsSupplement: payload.ttsSupplement,
       isError: payload.isError,

@@ -217,7 +217,7 @@ export function registerWorkboardCommand(params: {
   api: OpenClawPluginApi;
   store: WorkboardStore;
 }): void {
-  const command = {
+  params.api.registerCommand({
     name: "workboard",
     description: "List, create, inspect, and dispatch Workboard cards.",
     acceptsArgs: true,
@@ -248,6 +248,5 @@ export function registerWorkboardCommand(params: {
           resolveSandboxWorkspaceAuthority: params.api.runtime.sandbox.resolveWorkspaceAuthority,
         }),
       }),
-  } satisfies Parameters<OpenClawPluginApi["registerCommand"]>[0];
-  params.api.registerCommand({ ...command, handler: params.store.bindOperation(command.handler) });
+  });
 }
