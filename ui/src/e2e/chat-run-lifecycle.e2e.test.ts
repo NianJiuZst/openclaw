@@ -351,7 +351,7 @@ suite.define(() => {
       .toBe("reconnecting");
     await stop.waitFor({ state: "visible" });
     expect(await stop.isEnabled()).toBe(true);
-    if (suite.captureProof) {
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
       await currentPage.screenshot({
         path: path.join(suite.artifactDir, "offline-stop-visible.png"),
         fullPage: true,
