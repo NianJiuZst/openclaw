@@ -1,4 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
+import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -19,6 +21,10 @@ import {
 } from "./methods/registry.js";
 import { isLoopbackHost } from "./net.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
+import {
+  indexPluginNodeCapabilitySurfaces,
+  reconcileClientPluginNodeCapabilities,
+} from "./plugin-node-capability.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
@@ -31,6 +37,7 @@ import {
   getPresenceVersion,
   incrementPresenceVersion,
 } from "./server/health-state.js";
+import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
@@ -39,17 +46,6 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type GatewayEarlyRuntime = Awaited<
   ReturnType<typeof import("./server-startup-early.js").startGatewayEarlyRuntime>
 >;
-
-const MAX_MEDIA_TTL_HOURS = 24 * 7;
-
-function resolveMediaCleanupTtlMs(ttlHoursRaw: number): number {
-  const ttlHours = Math.min(Math.max(ttlHoursRaw, 1), MAX_MEDIA_TTL_HOURS);
-  const ttlMs = ttlHours * 60 * 60_000;
-  if (!Number.isFinite(ttlMs) || !Number.isSafeInteger(ttlMs)) {
-    throw new Error(`Invalid media.ttlHours: ${String(ttlHoursRaw)}`);
-  }
-  return ttlMs;
-}
 
 function approvalRequestTargetsSession(
   request: unknown,
@@ -218,9 +214,6 @@ export async function startGatewayCoreRuntime(input: {
             removeChatRun,
             agentRunSeq,
             nodeSendToSession,
-            ...(typeof cfgAtStart.attachments?.ttlHours === "number"
-              ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.attachments.ttlHours) }
-              : {}),
             skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
             getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,
             setSkillsRefreshTimer: (timer) => {
@@ -427,6 +420,11 @@ export async function startGatewayCoreRuntime(input: {
     return uniqueStrings(methods);
   };
   kernel.publishMethodSurface(listAttachedGatewayMethods());
+  const getPluginNodeCapabilities = () =>
+    withCoreCanvasNodeCapability(
+      listPluginNodeCapabilities(pluginRuntime.registry),
+      isCoreCanvasHostEnabled(getRuntimeConfig()),
+    );
   const replaceAttachedPluginRuntime = (loaded: {
     pluginRegistry: typeof pluginRuntime.registry;
     gatewayMethods: string[];
@@ -445,6 +443,10 @@ export async function startGatewayCoreRuntime(input: {
     attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
     kernel.publishMethodSurface(listAttachedGatewayMethods());
     nodeRegistry.refreshRuntimePolicy();
+    const surfaces = indexPluginNodeCapabilitySurfaces(getPluginNodeCapabilities());
+    for (const client of clients) {
+      reconcileClientPluginNodeCapabilities(client, surfaces);
+    }
   };
   const refreshAttachedGatewayDiscovery = async (
     nextPluginRegistry: typeof pluginRuntime.registry,
@@ -480,12 +482,13 @@ export async function startGatewayCoreRuntime(input: {
       import("../plugins/services.js"),
     ]);
     const cancelledReload = (activeChannels: Iterable<ChannelId>): GatewayPluginReloadResult => ({
-      restartChannels: new Set(),
       activeChannels: new Set(activeChannels),
       cancelled: true,
     });
     const listAttachedChannelIds = () =>
-      new Set(listLoadedChannelPluginsForRegistry(pluginRuntime.registry).map(({ id }) => id));
+      new Set(
+        listLoadedChannelPluginsForRegistry(pluginRuntime.registry).map((plugin) => plugin.id),
+      );
     const beforeChannelIds = listAttachedChannelIds();
     const nextPluginActivationConfig = resolveGatewayStartupPluginActivationConfig({
       runtimeConfig: params.nextConfig,
@@ -519,14 +522,13 @@ export async function startGatewayCoreRuntime(input: {
         : new Set<string>();
     const pluginRuntimeGeneration = kernel.pluginRuntimeGeneration;
     const replacement = pluginRuntimeGeneration.reserve();
+    const releaseChannelStarts = channelManager.pauseChannelStarts();
+    let restoreChannelStarts = true;
     let recoverFromReplacementTeardown: ((error: unknown) => void) | undefined;
     try {
-      // Replacement retires every attached runtime binding, even for unchanged channels.
-      // Stop their monitors first so retained callbacks cannot outlive that generation.
-      await params.beforeReplace(
-        beforeChannelIds,
-        channelManager.getPluginCommandCatalogAccounts(),
-      );
+      // Every account retains its plugin runtime, including startup work before its first route.
+      // Drain the old generation together; resource-by-resource retention misses late registrations.
+      await params.beforeReplace(beforeChannelIds);
       // A rejected reservation restores startup authority; a committed replacement never does.
       if (params.isAborted?.()) {
         replacement.reject();
@@ -536,6 +538,8 @@ export async function startGatewayCoreRuntime(input: {
       if (previousServices) {
         // Service shutdown is irreversible; only the synchronous runtime commit releases recovery.
         recoverFromReplacementTeardown = params.onReplacementTeardownFailure;
+        restoreChannelStarts = false;
+        replacement.retirePrevious();
         await previousServices.stop({
           strict: true,
           deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
@@ -547,6 +551,8 @@ export async function startGatewayCoreRuntime(input: {
         }
       }
       await params.commitRuntime(() => {
+        // A committed load that fails before registry publication cannot reopen old accounts.
+        restoreChannelStarts = false;
         replacement.commit();
         pluginRuntimeGeneration.publishServices(replacement.claim, null);
         recoverFromReplacementTeardown = undefined;
@@ -575,6 +581,7 @@ export async function startGatewayCoreRuntime(input: {
             resolveGatewayContext: resolvePluginGatewayContext,
           });
           replaceAttachedPluginRuntime(loaded);
+          releaseChannelStarts("published");
         }) ||
         !loaded
       ) {
@@ -589,6 +596,7 @@ export async function startGatewayCoreRuntime(input: {
         config: params.nextConfig,
         workspaceDir: pluginWorkspaceDir,
         broadcastPluginEvent,
+        getCronService: () => runtimeState.cronState.cron,
         onHandle: (handle) => pluginRuntimeGeneration.publishServices(replacement.claim, handle),
       });
       if (
@@ -604,9 +612,12 @@ export async function startGatewayCoreRuntime(input: {
       replacement.reject();
       recoverFromReplacementTeardown?.(error);
       throw error;
+    } finally {
+      if (restoreChannelStarts) {
+        releaseChannelStarts("rollback");
+      }
     }
-    const activeChannels = listAttachedChannelIds();
-    return { restartChannels: activeChannels, activeChannels };
+    return { activeChannels: listAttachedChannelIds() };
   };
 
   return {
@@ -632,6 +643,7 @@ export async function startGatewayCoreRuntime(input: {
     validateAgentRuntimeApprovalAuthority,
     attachedGatewayExtraHandlers,
     getAttachedGatewayMethodRegistry: () => attachedGatewayMethodRegistry,
+    getPluginNodeCapabilities,
     replaceAttachedPluginRuntime,
     refreshAttachedGatewayDiscovery,
     loadGatewayModelCatalog,
