@@ -559,7 +559,9 @@ describe("gateway plugin instance bindings", () => {
         initialMonitors.map((monitor) => requestInstanceBindingProbe(monitor.runtime)),
       );
       expect(initialProbes[0]).toEqual(initialProbes[1]);
-      expect(initialProbes[0].reloadSettled).toBe(true);
+      for (const probe of initialProbes) {
+        expect(probe.reloadSettled).toBe(true);
+      }
       proof.observations.push({ phase: "initial", probes: initialProbes });
       proof.events.push({ event: "initial-requests-succeeded" });
       const registrationsBeforeReload = coordinator.runtimes.length;
@@ -582,9 +584,11 @@ describe("gateway plugin instance bindings", () => {
         })
         .toBe(true);
       const freshProbe = await requestInstanceBindingProbe(freshRuntime);
-      expect(freshProbe.registryId).not.toBe(initialProbes[0].registryId);
-      expect(freshProbe.sessionsId).toBe(initialProbes[0].sessionsId);
-      expect(freshProbe.placementId).toBe(initialProbes[0].placementId);
+      for (const initialProbe of initialProbes) {
+        expect(freshProbe.registryId).not.toBe(initialProbe.registryId);
+        expect(freshProbe.sessionsId).toBe(initialProbe.sessionsId);
+        expect(freshProbe.placementId).toBe(initialProbe.placementId);
+      }
       expect(hotReloadRecovery).not.toHaveBeenCalled();
       proof.observations.push({ phase: "replacement", probe: freshProbe });
       proof.events.push({ event: "reload-settled" });
