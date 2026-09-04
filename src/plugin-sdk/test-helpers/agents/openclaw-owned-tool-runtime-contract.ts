@@ -76,6 +76,7 @@ export function createOwnerBackedContractTool(params: {
   pluginId: string;
   name: string;
   result: AgentToolResult<unknown>;
+  trustedLocalMedia?: boolean;
 }): AnyAgentTool {
   const tool = {
     name: params.name,
@@ -88,6 +89,7 @@ export function createOwnerBackedContractTool(params: {
     pluginId: params.pluginId,
     optional: false,
     sideEffecting: true,
+    ...(params.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
   });
   return tool;
 }
