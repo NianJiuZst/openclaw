@@ -175,6 +175,7 @@ async function patchInstanceBindingTestConfig(
 describe("gateway plugin instance bindings", () => {
   const started: Array<Awaited<ReturnType<typeof startTestGatewayServer>>> = [];
   const sockets: Array<Awaited<ReturnType<typeof connectWebchatClient>>> = [];
+  const finishServiceStops: Array<() => void> = [];
 
   let channelProof: ChannelBindingProof | undefined;
   let channelCleanup: InstanceBindingProbeCoordinator["channelCleanup"];
@@ -185,6 +186,11 @@ describe("gateway plugin instance bindings", () => {
     // Synthetic recovery emits no signal for a run loop to consume. Reopen admission
     // before teardown joins background work that may be waiting behind that fence.
     markGatewaySigusr1RestartHandled();
+    // The replacement deadline has already been observed. Let the original
+    // synthetic stop finish before final close releases its retained state.
+    for (const finish of finishServiceStops.splice(0)) {
+      finish();
+    }
     const closingSockets = sockets.splice(0);
     const socketClosures = closingSockets.map((socket) =>
       socket.readyState === socket.CLOSED
@@ -744,6 +750,7 @@ describe("gateway plugin instance bindings", () => {
     { timeout: 600_000 },
     async (serviceStopFailure) => {
       const { coordinator } = await prepareInstanceBindingTest({ serviceStopFailure });
+      finishServiceStops.push(coordinator.serviceStopCompletion.resolve);
       const hotReloadRecovery = vi.fn(() => {
         // No run loop consumes this synthetic emission, so release its signal-admission lease.
         markGatewaySigusr1RestartHandled();

@@ -1,6 +1,7 @@
 // Synthetic plugin fixtures for Gateway instance and channel lifecycle tests.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 
 export const INSTANCE_BINDING_PROBE_KEY = Symbol.for("openclaw.test.gatewayInstanceBindingProbe");
@@ -33,6 +34,7 @@ export type InstanceBindingProbeCoordinator = {
   runtimes: PluginRuntime[];
   serviceStarts: number;
   serviceStops: number;
+  serviceStopCompletion: ReturnType<typeof createDeferred<void>>;
   serviceStopFailure?: "rejection" | "timeout";
   channelProof?: ChannelBindingProof;
   channelIds?: readonly string[];
@@ -60,6 +62,7 @@ export function installInstanceBindingProbeCoordinator(options?: {
     runtimes: [],
     serviceStarts: 0,
     serviceStops: 0,
+    serviceStopCompletion: createDeferred(),
     ...(options?.channels ? { channelProof: { events: [], monitors: [], observations: [] } } : {}),
     ...(options?.serviceStopFailure ? { serviceStopFailure: options.serviceStopFailure } : {}),
   };
@@ -109,7 +112,7 @@ export async function writeInstanceBindingProbePlugin(bundledRoot: string): Prom
             return Promise.reject(new Error("instance-binding service cleanup rejected"));
           }
           if (coordinator.serviceStopFailure === "timeout") {
-            return new Promise(() => {});
+            return coordinator.serviceStopCompletion.promise;
           }
         },
       });
