@@ -6,7 +6,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import {
   createAgentPatchedSessionModelFallback,
-  type InternalAgentPatchedSessionModelFallback,
+  type AgentPatchedSessionModelFallback,
 } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveFailoverReasonFromError } from "./failover-error.js";
@@ -34,7 +34,7 @@ async function reconcileAgentPatchedSessionModel(params: {
   storePath?: string;
   outcome: SessionModelRunOutcome;
   expectedMarkerTs?: number;
-  validatedFallback?: InternalAgentPatchedSessionModelFallback;
+  validatedFallback?: AgentPatchedSessionModelFallback;
   now?: number;
 }): Promise<"cleared" | "promoted" | "reverted" | "kept" | "none"> {
   const reason = params.outcome.success
@@ -96,8 +96,8 @@ async function reconcileAgentPatchedSessionModel(params: {
         authProfileOverride: marker.prevAuthProfileOverride,
         authProfileOverrideSource: marker.prevAuthProfileOverrideSource,
         authProfileOverrideCompactionCount: marker.prevAuthProfileOverrideCompactionCount,
+        contextWindow: marker.prevContextWindow,
         thinkingLevel: marker.prevThinkingLevel,
-        thinkingLevelSelection: marker.prevThinkingLevelSelection,
         modelFallback: undefined,
         liveModelSwitchPending: undefined,
       };
@@ -140,7 +140,7 @@ export function createAgentPatchedSessionModelRunGuard(params: {
   onError?: (error: unknown) => void;
 }) {
   let markerTs: number | undefined;
-  let validatedFallback: InternalAgentPatchedSessionModelFallback | undefined;
+  let validatedFallback: AgentPatchedSessionModelFallback | undefined;
   if (params.sessionKey) {
     try {
       const entry = loadSessionEntry({
@@ -166,6 +166,10 @@ export function createAgentPatchedSessionModelRunGuard(params: {
   let failure: { error?: unknown; reason?: FailoverReason } = {};
   let reconciled = false;
   const captureFailure = (error: unknown, reason?: string) => {
+    // Only the patch captured when this guard was created can be reconciled.
+    if (markerTs === undefined) {
+      return false;
+    }
     const classifiedReason = reason
       ? (reason as FailoverReason)
       : resolveFailoverReasonFromError(error);

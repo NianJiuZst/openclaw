@@ -2,20 +2,20 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import { NATIVE_UPDATE_DECLINED_EVENT } from "../app/native-link-routing.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import "./sidebar-update-card.ts";
 
 type SidebarUpdateCardElement = HTMLElement & {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
+  compact: boolean;
   heldUpdateCampaignId: string | null;
   updateBusy: boolean;
   canUpdate: boolean;
   canHoldUpdate: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
-  onRefresh: () => void;
+  onRefresh: () => Promise<boolean>;
   onHoldUpdate: () => Promise<boolean>;
   statusBanner: ApplicationStatusBanner | null;
   onReviewUpdate: () => void;
@@ -59,7 +59,7 @@ afterEach(() => {
 describe("SidebarUpdateCard", () => {
   it("renders the refresh state and invokes its action", async () => {
     const element = await mount(null);
-    const onRefresh = vi.fn();
+    const onRefresh = vi.fn(async () => false);
     element.refreshRequired = true;
     element.onRefresh = onRefresh;
     await element.updateComplete;
@@ -78,13 +78,90 @@ describe("SidebarUpdateCard", () => {
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 
+  it("restores an actionable retry after stale-client recovery cannot reach the Gateway", async () => {
+    const element = await mount(null);
+    let completeRefresh: ((reloading: boolean) => void) | undefined;
+    const firstRefresh = new Promise<boolean>((resolve) => {
+      completeRefresh = resolve;
+    });
+    const onRefresh = vi
+      .fn<() => Promise<boolean>>()
+      .mockReturnValueOnce(firstRefresh)
+      .mockResolvedValue(false);
+    element.refreshRequired = true;
+    element.onRefresh = onRefresh;
+    await element.updateComplete;
+
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    action?.click();
+    await element.updateComplete;
+
+    expect(action?.disabled).toBe(true);
+    expect(action?.textContent).toContain("Reloading…");
+    action?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    completeRefresh?.(false);
+    await vi.waitFor(() => expect(action?.disabled).toBe(false));
+    expect(element.textContent).toContain("Actions are unavailable while the Gateway reconnects.");
+    expect(action?.textContent).toContain("Retry now");
+
+    action?.click();
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores an obsolete refresh result after recovery state is re-established", async () => {
+    const element = await mount(null);
+    let completeFirst: ((reloading: boolean) => void) | undefined;
+    let completeSecond: ((reloading: boolean) => void) | undefined;
+    const onRefresh = vi
+      .fn<() => Promise<boolean>>()
+      .mockReturnValueOnce(
+        new Promise<boolean>((resolve) => {
+          completeFirst = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<boolean>((resolve) => {
+          completeSecond = resolve;
+        }),
+      );
+    element.refreshRequired = true;
+    element.onRefresh = onRefresh;
+    await element.updateComplete;
+
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    await element.updateComplete;
+
+    element.refreshRequired = false;
+    await element.updateComplete;
+    element.refreshRequired = true;
+    await element.updateComplete;
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    action?.click();
+    await element.updateComplete;
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+    expect(action?.disabled).toBe(true);
+
+    completeFirst?.(false);
+    await element.updateComplete;
+    expect(action?.disabled).toBe(true);
+    expect(element.textContent).not.toContain(
+      "Actions are unavailable while the Gateway reconnects.",
+    );
+
+    completeSecond?.(false);
+    await vi.waitFor(() => expect(action?.disabled).toBe(false));
+    expect(element.textContent).toContain("Actions are unavailable while the Gateway reconnects.");
+  });
+
   it("gives the refresh state precedence over an available update", async () => {
     const element = await mount({
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
       channel: "stable",
     });
-    const onRefresh = vi.fn();
+    const onRefresh = vi.fn(async () => false);
     const onUpdate = vi.fn();
     element.refreshRequired = true;
     element.onRefresh = onRefresh;
@@ -112,33 +189,7 @@ describe("SidebarUpdateCard", () => {
     expect(onReviewUpdate).toHaveBeenCalledOnce();
   });
 
-  it("returns a declined native alert update to the gateway", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
-
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.updateBusy = true;
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.updateBusy = false;
-    element.updateAvailable = null;
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.remove();
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("narrates the whole update after the Gateway drops its metadata", async () => {
+  it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
     const element = await mount(
       { currentVersion: "1.0.0", latestVersion: "1.0.0", channel: "dev", commitsBehind: 246 },
       {
@@ -152,7 +203,9 @@ describe("SidebarUpdateCard", () => {
         },
       },
     );
-    expect(element.querySelector(".sidebar-update-card")).toBeNull();
+    expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
+      "246 commits behind",
+    );
 
     element.updateBusy = true;
     await element.updateComplete;
@@ -164,6 +217,51 @@ describe("SidebarUpdateCard", () => {
     element.updateSchedule = null;
     await element.updateComplete;
     expect(element.textContent).toContain("Updating Gateway…");
+  });
+
+  it("keeps an available update actionable inside the compact Inbox row", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    element.compact = true;
+    await element.updateComplete;
+
+    expect(element.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(
+      "Update available",
+    );
+    expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
+      "Update Gateway",
+    );
+  });
+
+  it("keeps an unauthorized update discoverable without allowing activation", async () => {
+    const element = await mount(
+      {
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+        channel: "stable",
+      },
+      null,
+      false,
+    );
+    const onUpdate = vi.fn();
+    element.onUpdate = onUpdate;
+
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    const tooltip = action?.closest("openclaw-tooltip") as
+      | (HTMLElement & { content?: string; updateComplete: Promise<boolean> })
+      | null;
+    await tooltip?.updateComplete;
+
+    expect(action?.disabled).toBe(false);
+    expect(action?.getAttribute("aria-disabled")).toBe("true");
+    expect(action?.getAttribute("aria-describedby")).not.toBeNull();
+    expect(tooltip?.hasAttribute("open-on-click")).toBe(true);
+    expect(tooltip?.content).toContain("Administrator access is required");
+    action?.click();
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it("renders a quiet live countdown and stops ticking on disconnect", async () => {

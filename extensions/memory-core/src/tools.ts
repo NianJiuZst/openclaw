@@ -1,5 +1,3 @@
-// Memory Core plugin module implements tools behavior.
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveMemorySearchStaleness,
   stripMemoryAnnotationCarriers,
@@ -12,16 +10,12 @@ import {
   readPositiveIntegerParam,
   readStringParam,
   resolveMemoryDreamingPluginConfig,
-  resolveMemorySearchConfig,
+  resolveRuntimeConfigCacheKey,
   type MemoryCorpusSearchResult,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import {
-  resolveMemoryDreamingConfig,
-  resolveMemoryDeepDreamingConfig,
-} from "openclaw/plugin-sdk/memory-core-host-status";
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
   attemptMemoryCorpus,
   composeMemoryCorpusMetadata,
@@ -29,13 +23,18 @@ import {
   searchMemoryCorpusSupplements,
   unavailableMemoryCorpus,
   type MemoryCorpusAttempt,
+  type MemoryCorpusFailure,
 } from "./memory-corpus.js";
 import { executeMemoryReadResult, executeWikiMemoryReadResult } from "./memory-read-tool.js";
 import {
   buildPausedMemoryIndexUnavailableResult,
   executeMemorySearchToolQuery,
 } from "./memory-search-tool-query.js";
-import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import {
+  MEMORY_GET_TOOL_CONTRACT,
+  MEMORY_SEARCH_TOOL_CONTRACT,
+  type MemoryToolOptions,
+} from "./memory-tool-contract.js";
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
   resolveMemorySearchAbortError,
@@ -52,21 +51,17 @@ import {
   createMemoryTool,
   getMemoryManagerContextWithPurpose,
   loadMemoryToolRuntime,
-  MemoryGetSchema,
-  MemorySearchSchema,
 } from "./tools.shared.js";
 
-type MemorySearchToolResult =
-  | (MemorySearchResult & { corpus: MemorySource })
-  | MemoryCorpusSearchResult;
+type MemorySearchToolResult = MemorySearchResult | MemoryCorpusSearchResult;
 type MemoryManagerContext = Awaited<ReturnType<typeof getMemoryManagerContextWithPurpose>>;
 type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unknown }>;
 type MemorySearchToolQueryDebug = NonNullable<
   Awaited<ReturnType<typeof executeMemorySearchToolQuery>>["debug"]
 >;
 type PrimaryMemorySearchValue = {
-  results: Array<MemorySearchResult & { corpus: MemorySource }>;
-  rawResults: MemorySearchResult[];
+  results: MemorySearchResult[];
+  workspaceDir?: string;
   provider?: string;
   model?: string;
   fallback?: unknown;
@@ -78,7 +73,10 @@ type PrimaryMemorySearchValue = {
 
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
-const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
+const memorySearchToolCooldowns = new Map<
+  string,
+  MemoryCorpusFailure & { until: number; configKey: string }
+>();
 
 /**
  * Validate the model-authored corpus argument against the tool's closed enum.
@@ -100,29 +98,35 @@ function readCorpusParam<T extends string>(
   throw new Error(`corpus must be one of: ${allowed.join(", ")}`);
 }
 
-function resolveMemorySearchToolCooldownKey(options: {
-  agentId?: string;
-  agentSessionKey?: string;
-}): string {
-  return options.agentId ?? options.agentSessionKey ?? "default";
-}
-
-function readMemorySearchToolCooldown(key: string): { error: string } | undefined {
+function readMemorySearchToolCooldown(
+  key: string,
+  cfg: OpenClawConfig,
+): MemoryCorpusFailure | undefined {
   const entry = memorySearchToolCooldowns.get(key);
   if (!entry) {
     return undefined;
   }
-  if (entry.until <= Date.now()) {
+  // Failed searches pause retries only for the configuration that produced them.
+  if (entry.until <= Date.now() || entry.configKey !== resolveRuntimeConfigCacheKey(cfg)) {
     memorySearchToolCooldowns.delete(key);
     return undefined;
   }
-  return { error: entry.error };
+  return {
+    error: entry.error,
+    deadline: entry.deadline,
+    ...(entry.code ? { code: entry.code } : {}),
+  };
 }
 
-function recordMemorySearchToolCooldown(key: string, error: string): void {
+function recordMemorySearchToolCooldown(
+  key: string,
+  cfg: OpenClawConfig,
+  failure: MemoryCorpusFailure,
+): void {
   memorySearchToolCooldowns.set(key, {
     until: Date.now() + MEMORY_SEARCH_TOOL_COOLDOWN_MS,
-    error,
+    configKey: resolveRuntimeConfigCacheKey(cfg),
+    ...failure,
   });
 }
 
@@ -196,8 +200,7 @@ function mergeMemorySearchCorpusResults(params: {
   maxResults: number;
   balanceCorpora: boolean;
 }): MemorySearchToolResult[] {
-  const memoryResults = params.memoryResults;
-  const supplementResults = params.supplementResults;
+  const { memoryResults, supplementResults } = params;
   if (!params.balanceCorpora || memoryResults.length === 0 || supplementResults.length === 0) {
     return mergeRankedMemorySearchToolStreams(memoryResults, supplementResults).slice(
       0,
@@ -227,68 +230,12 @@ function mergeMemorySearchCorpusResults(params: {
   ).slice(0, params.maxResults);
 }
 
-function buildRecallKey(
-  result: Pick<MemorySearchResult, "source" | "path" | "startLine" | "endLine">,
-): string {
-  return `${result.source}:${result.path}:${result.startLine}:${result.endLine}`;
-}
-
-function resolveRecallTrackingResults(
-  rawResults: MemorySearchResult[],
-  surfacedResults: MemorySearchResult[],
-): MemorySearchResult[] {
-  if (surfacedResults.length === 0 || rawResults.length === 0) {
-    return surfacedResults;
-  }
-  const rawByKey = new Map<string, MemorySearchResult>();
-  for (const raw of rawResults) {
-    const key = buildRecallKey(raw);
-    if (!rawByKey.has(key)) {
-      rawByKey.set(key, raw);
-    }
-  }
-  return surfacedResults.map((surfaced) => rawByKey.get(buildRecallKey(surfaced)) ?? surfaced);
-}
-
-function queueShortTermRecallTracking(params: {
-  workspaceDir?: string;
-  query: string;
-  rawResults: MemorySearchResult[];
-  surfacedResults: MemorySearchResult[];
-  timezone?: string;
-}): void {
-  const trackingResults = resolveRecallTrackingResults(params.rawResults, params.surfacedResults);
-  void recordShortTermRecalls({
-    workspaceDir: params.workspaceDir,
-    query: params.query,
-    results: trackingResults,
-    timezone: params.timezone,
-  }).catch(() => {
-    // Gateway tool calls are latency-sensitive and live in a long-running
-    // process, so background best-effort tracking is safe here unlike in the CLI.
-  });
-}
-
-export function createMemorySearchTool(options: {
-  config?: OpenClawConfig;
-  getConfig?: () => OpenClawConfig | undefined;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  oneShotCliRun?: boolean;
-  conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
-  activeProjectKeys?: readonly string[];
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-}) {
+export function createMemorySearchTool(options: MemoryToolOptions) {
   return createMemoryTool({
     options,
-    label: "Memory Search",
-    name: "memory_search",
-    description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). Corpus warnings mean the returned results are partial and must be surfaced to the user. If response has disabled=true or stale=true, tell the user and include the warning/action guidance.",
-    parameters: MemorySearchSchema,
+    contract: MEMORY_SEARCH_TOOL_CONTRACT,
     execute:
-      ({ cfg, agentId }) =>
+      ({ cfg, agentId, settings }) =>
       async (_toolCallId, params, callerSignal) => {
         const rawParams = asToolParamsRecord(params);
         if (callerSignal?.aborted) {
@@ -306,12 +253,21 @@ export function createMemorySearchTool(options: {
         // The trusted runtime chooses the recall corpus; model-authored arguments cannot broaden it.
         const requestedCorpus =
           options.conversationRecall?.corpus === "sessions" ? "sessions" : modelRequestedCorpus;
-        const cooldownKey = resolveMemorySearchToolCooldownKey({
-          agentId,
-          agentSessionKey: options.agentSessionKey,
-        });
+        if (
+          requestedCorpus === "sessions" &&
+          !options.conversationRecall &&
+          !settings.searchSources.includes("sessions")
+        ) {
+          return jsonResult(
+            buildMemorySearchUnavailableResult("Session transcript search is not enabled.", {
+              warning: "Session transcript search is unavailable for this agent.",
+              action:
+                'Enable memory.search.experimental.sessionMemory and add "sessions" to memory.search.sources, then retry memory_search.',
+            }),
+          );
+        }
         const cooldown =
-          requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(cooldownKey);
+          requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(agentId, cfg);
         const toolStartedAt = Date.now();
         const searchesMemory = requestedCorpus !== "wiki";
         const searchesWiki = requestedCorpus === "wiki" || requestedCorpus === "all";
@@ -332,7 +288,7 @@ export function createMemorySearchTool(options: {
           signal: AbortSignal,
         ): Promise<MemoryCorpusAttempt<PrimaryMemorySearchValue | null>> => {
           if (cooldown) {
-            return unavailableMemoryCorpus("memory", null, cooldown.error);
+            return { corpus: "memory", outcome: "unavailable", value: null, ...cooldown };
           }
           const attempted = await attemptMemoryCorpus<Awaited<
             ReturnType<typeof executeMemorySearchToolQuery>
@@ -352,11 +308,9 @@ export function createMemorySearchTool(options: {
               if ("error" in memory) {
                 throw new Error(memory.error ?? "memory search unavailable");
               }
-              const settings = resolveMemorySearchConfig(cfg, agentId);
-              const defaultSources = settings?.searchSources;
               const explicitSources: MemorySource[] | undefined =
                 requestedCorpus === "sessions" &&
-                (options.conversationRecall || defaultSources?.includes("sessions"))
+                (options.conversationRecall || settings.searchSources.includes("sessions"))
                   ? ["sessions"]
                   : requestedCorpus === "memory"
                     ? ["memory"]
@@ -378,11 +332,11 @@ export function createMemorySearchTool(options: {
                 },
                 query: {
                   text: query,
-                  resultLimit: maxResults ?? settings?.query.maxResults ?? 10,
+                  resultLimit: maxResults ?? settings.query.maxResults,
                   minScore,
                   explicitSources,
-                  defaultSources,
-                  indexedSources: settings?.sources,
+                  defaultSources: settings.searchSources,
+                  indexedSources: settings.sources,
                   requestedCorpus,
                   sessionKey: options.agentSessionKey,
                   activeProjectKeys: options.activeProjectKeys,
@@ -397,63 +351,38 @@ export function createMemorySearchTool(options: {
             if (callerSignal?.aborted) {
               throw resolveMemorySearchAbortError(callerSignal);
             }
-            const error =
-              attempted.outcome === "unavailable" ? attempted.error : "memory search unavailable";
-            recordMemorySearchToolCooldown(cooldownKey, error);
-            return unavailableMemoryCorpus("memory", null, error);
+            const failure: MemoryCorpusFailure =
+              attempted.outcome === "unavailable"
+                ? {
+                    error: attempted.error,
+                    deadline: attempted.deadline,
+                    ...(attempted.code ? { code: attempted.code } : {}),
+                  }
+                : { error: "memory search unavailable", deadline: false };
+            recordMemorySearchToolCooldown(agentId, cfg, failure);
+            return { corpus: "memory", outcome: "unavailable", value: null, ...failure };
           }
           const executed = attempted.value!;
-          if (executed.pausedIndexIdentityReason) {
-            const reason = executed.pausedIndexIdentityReason;
+          if (executed.pausedIndexIdentity) {
             return unavailableMemoryCorpus(
               "memory",
               {
                 results: [],
-                rawResults: [],
-                unavailableResult: buildPausedMemoryIndexUnavailableResult(reason),
+                unavailableResult: buildPausedMemoryIndexUnavailableResult(
+                  executed.pausedIndexIdentity,
+                  { agentId, status: executed.status },
+                ),
               },
-              reason,
+              executed.pausedIndexIdentity.reason,
             );
           }
-          const citationsMode = resolveMemoryCitationsMode(cfg);
-          const includeCitations = shouldIncludeCitations({
-            mode: citationsMode,
-            sessionKey: options.agentSessionKey,
-          });
-          const rawResults = executed.rawResults;
-          const memoryResults = decorateCitations(
-            rawResults.map((result) => ({
-              ...result,
-              snippet: stripMemoryAnnotationCarriers(result.snippet),
-            })),
-            includeCitations,
-          );
           const status = executed.status;
-          if (
-            resolveMemoryDreamingConfig({
-              pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
-              cfg,
-            }).enabled
-          ) {
-            queueShortTermRecallTracking({
-              workspaceDir: status.workspaceDir,
-              query,
-              rawResults,
-              surfacedResults: memoryResults,
-              timezone: resolveMemoryDeepDreamingConfig({
-                pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
-                cfg,
-              }).timezone,
-            });
-          }
           return {
             corpus: "memory",
             outcome: "ok",
             value: {
-              results: memoryResults.map((result) =>
-                Object.assign(result, { corpus: result.source }),
-              ),
-              rawResults,
+              results: executed.rawResults,
+              workspaceDir: status.workspaceDir,
               provider: status.provider,
               model: status.model,
               fallback: status.fallback,
@@ -485,21 +414,64 @@ export function createMemorySearchTool(options: {
               if (searchesMemory && !searchesWiki && memory?.outcome === "unavailable") {
                 return jsonResult(
                   memoryValue?.unavailableResult ??
-                    buildMemorySearchUnavailableResult(memory.error),
+                    buildMemorySearchUnavailableResult(memory.error, {
+                      agentId,
+                      deadline: memory.deadline,
+                      code: memory.code,
+                    }),
                 );
               }
               const wikiResults = wiki?.outcome === "not-registered" ? [] : (wiki?.value ?? []);
-              const results = mergeMemorySearchCorpusResults({
-                memoryResults: memoryValue?.results ?? [],
-                supplementResults: wikiResults,
-                maxResults: Math.max(1, maxResults ?? 10),
-                balanceCorpora: requestedCorpus === "all",
+              // Primary results already own their configured limit; only wiki/all need aggregation.
+              const results = searchesWiki
+                ? mergeMemorySearchCorpusResults({
+                    memoryResults: memoryValue?.results ?? [],
+                    supplementResults: wikiResults,
+                    maxResults: maxResults ?? 10,
+                    balanceCorpora: requestedCorpus === "all",
+                  })
+                : (memoryValue?.results ?? []);
+              // Preserve primary object identity through blending: only evidence
+              // actually returned to the model earns a recall signal.
+              const surfaced = new Set(results);
+              const recalled = (memoryValue?.results ?? []).filter((result) =>
+                surfaced.has(result),
+              );
+              const citationsMode = resolveMemoryCitationsMode(cfg);
+              const decorated = decorateCitations(
+                recalled.map((result) => ({
+                  ...result,
+                  corpus: result.source,
+                  snippet: stripMemoryAnnotationCarriers(result.snippet),
+                })),
+                shouldIncludeCitations({
+                  mode: citationsMode,
+                  sessionKey: options.agentSessionKey,
+                }),
+              );
+              const presentation = new Map<MemorySearchToolResult, MemorySearchResult>(
+                recalled.map((result, index) => [result, decorated[index]!]),
+              );
+              const dreaming = resolveMemoryDreamingConfig({
+                pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+                cfg,
               });
+              if (memory?.outcome === "ok" && dreaming.enabled) {
+                void recordShortTermRecalls({
+                  workspaceDir: memoryValue?.workspaceDir,
+                  query,
+                  results: recalled,
+                  timezone: dreaming.timezone,
+                }).catch(() => {
+                  // Gateway recall persistence stays off the reply latency path.
+                });
+              }
               const attempts = [
                 ...(requestedCorpus === "all" && memory ? [memory] : []),
                 ...(wiki ? [wiki] : []),
               ];
               const staleness = memoryValue?.staleness;
+              const recoveryAction = memoryValue?.unavailableResult?.action;
               const metadata = composeMemoryCorpusMetadata(
                 attempts,
                 staleness?.warning ? [staleness.warning] : [],
@@ -513,13 +485,15 @@ export function createMemorySearchTool(options: {
                   }
                 : undefined;
               return jsonResult({
-                results,
+                results: results.map((result) => presentation.get(result) ?? result),
                 provider: memoryValue?.provider,
                 model: memoryValue?.model,
                 fallback: memoryValue?.fallback,
-                citations: resolveMemoryCitationsMode(cfg),
+                citations: citationsMode,
                 mode: memoryValue?.mode,
                 ...(attempts.length > 0 ? metadata : {}),
+                // Another corpus can succeed while primary memory still needs repair.
+                ...(recoveryAction ? { action: recoveryAction } : {}),
                 ...staleness,
                 debug,
               });
@@ -529,11 +503,17 @@ export function createMemorySearchTool(options: {
           if (callerSignal?.aborted) {
             throw resolveMemorySearchAbortError(callerSignal);
           }
-          const message = formatErrorMessage(error);
+          const failed = unavailableMemoryCorpus("memory", null, error);
           if (requestedCorpus !== "wiki") {
-            recordMemorySearchToolCooldown(cooldownKey, message);
+            recordMemorySearchToolCooldown(agentId, cfg, failed);
           }
-          return jsonResult(buildMemorySearchUnavailableResult(message));
+          return jsonResult(
+            buildMemorySearchUnavailableResult(failed.error, {
+              agentId,
+              deadline: failed.deadline,
+              code: failed.code,
+            }),
+          );
         } finally {
           cleanupStarted = true;
           await closeMemoryManagers(memoryManagersToClose, callerSignal);
@@ -542,21 +522,10 @@ export function createMemorySearchTool(options: {
   });
 }
 
-export function createMemoryGetTool(options: {
-  config?: OpenClawConfig;
-  getConfig?: () => OpenClawConfig | undefined;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-}) {
+export function createMemoryGetTool(options: MemoryToolOptions) {
   return createMemoryTool({
     options,
-    label: "Memory Get",
-    name: "memory_get",
-    description:
-      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements. A response with status=not_found means every requested available corpus missed; corpus warnings mean coverage is partial and must be surfaced to the user.",
-    parameters: MemoryGetSchema,
+    contract: MEMORY_GET_TOOL_CONTRACT,
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params, callerSignal) => {
