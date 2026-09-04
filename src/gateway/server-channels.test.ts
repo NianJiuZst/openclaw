@@ -359,6 +359,101 @@ describe("server-channels auto restart", () => {
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
   });
 
+  it("keeps channel hooks and snapshots bound to their Gateway registry", async () => {
+    const joined: AbortSignal[] = [];
+    const createLifecycle = (id: ChannelId) => {
+      const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        joined.push(abortSignal);
+      });
+      const stopAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => undefined);
+      return {
+        plugin: createTestPlugin({ id, startAccount, stopAccount }),
+        startAccount,
+        stopAccount,
+      };
+    };
+    const a = createLifecycle("discord");
+    const b = createLifecycle("discord");
+    const bOnly = createLifecycle("slack");
+    const registryA = installTestRegistry(a.plugin);
+    const managerA = createManager({
+      channelIds: ["discord", "slack"],
+      getPluginHttpRouteRegistry: () => registryA,
+    });
+    await managerA.startChannels();
+    await waitForImmediate();
+    expect(a.startAccount).toHaveBeenCalledTimes(1);
+    const originalA = firstStartAccountContext(a.startAccount).abortSignal;
+
+    const registryB = installTestRegistry(b.plugin, bOnly.plugin);
+    const managerB = createManager({
+      channelIds: ["discord", "slack"],
+      getPluginHttpRouteRegistry: () => registryB,
+    });
+    try {
+      await managerB.startChannels();
+      await waitForImmediate();
+      expect(b.startAccount).toHaveBeenCalledTimes(1);
+      expect(bOnly.startAccount).toHaveBeenCalledTimes(1);
+      const originalB = firstStartAccountContext(b.startAccount).abortSignal;
+      const originalBOnly = firstStartAccountContext(bOnly.startAccount).abortSignal;
+      const snapshotChannels = Object.keys(managerA.getRuntimeSnapshot().channelAccounts).sort();
+
+      await managerA.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+      const stopped = {
+        aHook: a.stopAccount.mock.calls.length,
+        bHook: b.stopAccount.mock.calls.length,
+        aHookReceivedOwnSignal: a.stopAccount.mock.calls[0]?.[0].abortSignal === originalA,
+        foreignHookReceivedASignal: b.stopAccount.mock.calls.some(
+          ([ctx]) => ctx.abortSignal === originalA,
+        ),
+        aAborted: originalA.aborted,
+        aJoined: joined.includes(originalA),
+        bAborted: originalB.aborted,
+        bOnlyAborted: originalBOnly.aborted,
+      };
+      await managerA.startChannels();
+      await waitForImmediate();
+      expect(
+        {
+          snapshotChannels,
+          stopped,
+          starts: [a, b, bOnly].map(({ startAccount }) => startAccount.mock.calls.length),
+          bStillLive: !originalB.aborted && !originalBOnly.aborted,
+        },
+        "channel manager borrowed another Gateway registry",
+      ).toEqual({
+        snapshotChannels: ["discord"],
+        stopped: {
+          aHook: 1,
+          bHook: 0,
+          aHookReceivedOwnSignal: true,
+          foreignHookReceivedASignal: false,
+          aAborted: true,
+          aJoined: true,
+          bAborted: false,
+          bOnlyAborted: false,
+        },
+        starts: [2, 1, 1],
+        bStillLive: true,
+      });
+    } finally {
+      await Promise.all(
+        [managerA, managerB].flatMap((manager) =>
+          ["discord", "slack"].map((id) => manager.stopChannel(id)),
+        ),
+      );
+      const signals = [a, b, bOnly].flatMap(({ startAccount }) =>
+        startAccount.mock.calls.map(([ctx]) => ctx.abortSignal),
+      );
+      expect(signals.every((signal) => signal.aborted && joined.includes(signal))).toBe(true);
+      expect(joined).toHaveLength(signals.length);
+    }
+  });
+
   it("keeps a channel task admitted after the starting request finishes", async () => {
     const continueChannelTask = createDeferred();
     const observedAdmission = createDeferred<boolean>();
