@@ -402,7 +402,9 @@ describe("server-channels auto restart", () => {
       expect(bOnly.startAccount).toHaveBeenCalledTimes(1);
       const originalB = firstStartAccountContext(b.startAccount).abortSignal;
       const originalBOnly = firstStartAccountContext(bOnly.startAccount).abortSignal;
-      const snapshotChannels = Object.keys(managerA.getRuntimeSnapshot().channelAccounts).sort();
+      const snapshotChannels = Object.keys(
+        managerA.getRuntimeSnapshot().channelAccounts,
+      ).toSorted();
 
       await managerA.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
       const stopped = {

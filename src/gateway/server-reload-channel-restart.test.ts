@@ -190,15 +190,15 @@ it.each(["channel", "accounts"] as const)(
       const resumed = monitors
         .slice(beforeRollback)
         .map(({ owner, channelId }) => `${owner}:${channelId}`)
-        .sort();
+        .toSorted();
       const bInterrupted = foreignMonitors.some(
         ({ abortSignal, joined }) => abortSignal.aborted || joined,
       );
       expect(
         {
           resumed,
-          aChannels: Object.keys(ownerA.getRuntimeSnapshot().channelAccounts).sort(),
-          bChannels: Object.keys(ownerB.getRuntimeSnapshot().channelAccounts).sort(),
+          aChannels: Object.keys(ownerA.getRuntimeSnapshot().channelAccounts).toSorted(),
+          bChannels: Object.keys(ownerB.getRuntimeSnapshot().channelAccounts).toSorted(),
           bStopped: stopOwners.includes("B"),
           bInterrupted,
         },
