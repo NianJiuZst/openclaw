@@ -359,10 +359,12 @@ describe("mcp connection resolver helpers", () => {
           },
         },
       };
+      let attachedRegistry = previous.registry;
       const gatewayReload = createGatewayReloadHandlers({
         deps: {},
         broadcast() {},
         getState: () => gatewayState,
+        getPluginRegistry: () => attachedRegistry,
         setState(nextState) {
           gatewayState = nextState;
         },
@@ -374,6 +376,7 @@ describe("mcp connection resolver helpers", () => {
         async reloadPlugins({ beforeReplace, commitRuntime }) {
           await beforeReplace(new Set());
           await commitRuntime();
+          attachedRegistry = replacement.registry;
           setActivePluginRegistry(replacement.registry);
           return { restartChannels: new Set(), activeChannels: new Set() };
         },

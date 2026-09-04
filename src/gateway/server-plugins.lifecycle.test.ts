@@ -311,8 +311,8 @@ async function prepareInstanceBindingTest(options?: {
     const createLoader = loaderModule.createPluginModuleLoader;
     const loaderSpy = vi
       .spyOn(loaderModule, "createPluginModuleLoader")
-      .mockImplementation((options) => {
-        const load = createLoader(options);
+      .mockImplementation((loaderOptions) => {
+        const load = createLoader(loaderOptions);
         return (modulePath) => {
           if (modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath) {
             observation.resolvedTargets.push(modulePath);
