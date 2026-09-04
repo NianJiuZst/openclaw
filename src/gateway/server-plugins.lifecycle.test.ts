@@ -311,7 +311,9 @@ describe("gateway plugin instance bindings", () => {
     const socketClosures = closingSockets.map((socket) =>
       socket.readyState === socket.CLOSED
         ? Promise.resolve()
-        : new Promise<void>((resolve) => socket.once("close", () => resolve())),
+        : new Promise<void>((resolve) => {
+            socket.once("close", () => resolve());
+          }),
     );
     let serversClosed = false;
     try {
