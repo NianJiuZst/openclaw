@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { markGatewaySigusr1RestartHandled } from "../infra/restart.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -363,6 +364,9 @@ describe("gateway plugin instance bindings", () => {
   let skippedBefore: { channels?: string; providers?: string } | undefined;
 
   afterEach(async () => {
+    // Synthetic recovery emits no signal for a run loop to consume. Reopen admission
+    // before teardown joins background work that may be waiting behind that fence.
+    markGatewaySigusr1RestartHandled();
     const closingSockets = sockets.splice(0);
     const socketClosures = closingSockets.map((socket) =>
       socket.readyState === socket.CLOSED
@@ -922,7 +926,11 @@ describe("gateway plugin instance bindings", () => {
     { timeout: 600_000 },
     async (serviceStopFailure) => {
       const { coordinator } = await prepareInstanceBindingTest({ serviceStopFailure });
-      const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
+      const hotReloadRecovery = vi.fn(() => {
+        // No run loop consumes this synthetic emission, so release its signal-admission lease.
+        markGatewaySigusr1RestartHandled();
+        return { status: "emitted" as const };
+      });
       const port = await getFreePort();
       const server = await startTestGatewayServer(port, {
         auth: { mode: "none" },

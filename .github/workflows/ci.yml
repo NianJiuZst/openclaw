@@ -1922,14 +1922,7 @@ jobs:
             pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: |
-          audit_exit=0
-          node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high --ci || audit_exit=$?
-          if [ "$audit_exit" -eq 2 ]; then
-            echo "::warning::npm advisory service unavailable; production dependency audit incomplete. CI is continuing without full advisory coverage."
-          else
-            exit "$audit_exit"
-          fi
+        run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
   # Prime the lockfile- and pnpm-pinned store for fork PRs, manual runs, the
   # GitHub backend, and docs-only same-repo PRs. This job restores only; the
@@ -2549,7 +2542,7 @@ jobs:
       # Populate metadata and the executable before the 30-second MCP handshake.
       - name: Pre-warm Chrome MCP
         if: matrix.task == 'browser-extension' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
-        run: npx -y chrome-devtools-mcp@1.8.0 --version
+        run: npx -y --audit=false chrome-devtools-mcp@1.8.0 --version
 
       - name: Save Chrome MCP npm cache
         if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'

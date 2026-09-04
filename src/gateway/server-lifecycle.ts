@@ -27,6 +27,7 @@ import {
   type GatewayPluginRuntimeClaim,
 } from "./server-plugin-runtime-generation.js";
 import type { GatewayCloseOptions } from "./server-public.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import type { GatewayShutdownRuntime } from "./server-shutdown.runtime.js";
@@ -52,6 +53,7 @@ export async function prepareGatewayLifecycle(params: {
   shutdownRuntime: GatewayShutdownRuntime;
 }) {
   const { runtime, port, log, logCron, diagnosticsEnabled, shutdownRuntime } = params;
+  const requestEntryLifetime = new GatewayRequestEntryLifetime();
   const {
     minimalTestGateway,
     transportBridge,
@@ -382,6 +384,7 @@ export async function prepareGatewayLifecycle(params: {
       return;
     }
     lifecycle.closePreludeStarted = true;
+    requestEntryLifetime.beginClose();
     mentionInbox.dispose();
     postReadySidecarStopOwner.beginClose();
     gatewayLifetimeSidecarStopOwner.beginClose();
@@ -408,6 +411,7 @@ export async function prepareGatewayLifecycle(params: {
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
     await Promise.all([
+      requestEntryLifetime.waitForPendingEntries(),
       stopDeliveryRecoveryForClose(),
       stopMediaCleanupForClose(),
       runtimeState.stopGatewayUpdateCheck(),
@@ -481,7 +485,7 @@ export async function prepareGatewayLifecycle(params: {
   };
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
     try {
-      markClosePreludeStarted();
+      await beginClosePrelude();
       const channelIds = listLoadedChannelPluginsForRegistry(pluginRuntime.registry).map(
         (plugin) => plugin.id,
       );
@@ -523,6 +527,7 @@ export async function prepareGatewayLifecycle(params: {
         },
         getPendingReplyCount: getTotalPendingReplies,
         clients,
+        finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
         configReloader: { stop: stopConfigReloaderForClose },
         ...(transport
           ? {
@@ -540,6 +545,7 @@ export async function prepareGatewayLifecycle(params: {
         closeProviderTransportDispatcherPool: shutdownRuntime.closeProviderTransportDispatcherPool,
       })(optsValue);
     } finally {
+      await requestEntryLifetime.sealAndJoin();
       params.releasePluginMetadata();
     }
   };
@@ -586,6 +592,7 @@ export async function prepareGatewayLifecycle(params: {
 
   return {
     ...runtime,
+    requestEntryLifetime,
     subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents,
     restartRecoveryCandidates,

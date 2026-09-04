@@ -211,7 +211,7 @@ function createTestCronState(overrides: Partial<GatewayCronState> = {}): Gateway
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+    reconcileSystemJobs: vi.fn(async () => "converged" as const),
     ...overrides,
   };
 }
@@ -326,7 +326,7 @@ const hoisted = vi.hoisted(() => ({
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+    reconcileSystemJobs: vi.fn(async () => "converged" as const),
   })),
 }));
 
@@ -669,7 +669,7 @@ function createReloadHandlersForTest(
   },
 ) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
-  const reconcileHeartbeatJobs = vi.fn<GatewayCronState["reconcileHeartbeatJobs"]>(
+  const reconcileSystemJobs = vi.fn<GatewayCronState["reconcileSystemJobs"]>(
     async () => "converged",
   );
   const heartbeatRunner = {
@@ -682,7 +682,7 @@ function createReloadHandlersForTest(
     heartbeatRunner: heartbeatRunner as never,
     cronState: createTestCronState({
       cron: cron as never,
-      reconcileHeartbeatJobs,
+      reconcileSystemJobs,
     }),
   };
   const setState = vi.fn((nextState: typeof state) => {
@@ -721,7 +721,7 @@ function createReloadHandlersForTest(
     heartbeatRunner,
     logChannels,
     logCron,
-    reconcileHeartbeatJobs,
+    reconcileSystemJobs,
     setState,
   };
 }
@@ -1932,13 +1932,13 @@ describe("gateway hot reload model state", () => {
         const job = "job" in added ? added.job : added;
         activeRun = cron.run(job.id, "force");
         const abortSignal = await reviewStarted.promise;
-        const reconcileHeartbeatJobs = vi.fn(async () => {
+        const reconcileSystemJobs = vi.fn(async () => {
           await releaseReconciliation.promise;
           return reconciliationResult;
         });
         let state = {
           ...createDefaultGatewayReloadState(),
-          cronState: createTestCronState({ cron, cronEnabled: true, reconcileHeartbeatJobs }),
+          cronState: createTestCronState({ cron, cronEnabled: true, reconcileSystemJobs }),
         };
         const setState = vi.fn((nextState: typeof state) => {
           state = nextState;
@@ -1959,7 +1959,7 @@ describe("gateway hot reload model state", () => {
           },
         );
 
-        await waitForFast(() => expect(reconcileHeartbeatJobs).toHaveBeenCalledWith(nextConfig));
+        await waitForFast(() => expect(reconcileSystemJobs).toHaveBeenCalledWith(nextConfig));
         expect(abortSignal.aborted).toBe(false);
         current = !becomesStale;
         releaseReconciliation.resolve();
@@ -2175,7 +2175,7 @@ describe("gateway hot reload model state", () => {
       reconcileExitWatchers: newReconcileExitWatchers,
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     };
     hoisted.buildGatewayCronService.mockImplementationOnce(() => {
       order.push("build-new");
@@ -2244,7 +2244,7 @@ describe("gateway hot reload model state", () => {
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     };
     hoisted.buildGatewayCronService.mockReturnValueOnce(rebuiltCronState);
     const { applyHotReload, cronReconciliation } = createReloadHandlersForTest();
@@ -2284,17 +2284,20 @@ describe("gateway hot reload model state", () => {
   });
 
   it("waits for heartbeat monitor convergence before publishing an in-place update", async () => {
-    const { applyHotReload, heartbeatRunner, reconcileHeartbeatJobs, setState } =
+    const { applyHotReload, heartbeatRunner, reconcileSystemJobs, setState } =
       createReloadHandlersForTest(undefined, undefined, undefined, vi.fn(), false);
     const nextConfig = { agents: { defaults: { heartbeat: { every: "1h" } } } } as OpenClawConfig;
     let releaseReconciliation!: () => void;
     const reconciliation = new Promise<"converged">((resolve) => {
       releaseReconciliation = () => resolve("converged");
     });
-    reconcileHeartbeatJobs.mockImplementationOnce(async () => await reconciliation);
+    reconcileSystemJobs.mockImplementationOnce(async () => await reconciliation);
 
-    const reload = applyHotReload(createHotTailPlan({ restartHeartbeat: true }), nextConfig);
-    await waitForFast(() => expect(reconcileHeartbeatJobs).toHaveBeenCalledWith(nextConfig));
+    const reload = applyHotReload(
+      buildGatewayReloadPlan(["agents.defaults.heartbeat.every"]),
+      nextConfig,
+    );
+    await waitForFast(() => expect(reconcileSystemJobs).toHaveBeenCalledWith(nextConfig));
 
     expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
     expect(setState).not.toHaveBeenCalled();
@@ -2306,12 +2309,12 @@ describe("gateway hot reload model state", () => {
   });
 
   it("does not publish an in-place heartbeat update while reconciliation is retrying", async () => {
-    const { applyHotReload, heartbeatRunner, reconcileHeartbeatJobs, setState } =
+    const { applyHotReload, heartbeatRunner, reconcileSystemJobs, setState } =
       createReloadHandlersForTest(undefined, undefined, undefined, vi.fn(), false);
-    reconcileHeartbeatJobs.mockResolvedValueOnce("retry-scheduled");
+    reconcileSystemJobs.mockResolvedValueOnce("retry-scheduled");
 
     await expect(
-      applyHotReload(createHotTailPlan({ restartHeartbeat: true }), {
+      applyHotReload(buildGatewayReloadPlan(["agents.defaults.heartbeat.every"]), {
         agents: { defaults: { heartbeat: { every: "1h" } } },
       } as OpenClawConfig),
     ).rejects.toThrow("cron monitor");
@@ -2326,7 +2329,7 @@ describe("gateway hot reload model state", () => {
   ])(
     "reconciles skill review jobs when Workshop mode changes from $from to $to",
     async ({ from, to }) => {
-      const { applyHotReload, heartbeatRunner, reconcileHeartbeatJobs, setState } =
+      const { applyHotReload, heartbeatRunner, reconcileSystemJobs, setState } =
         createReloadHandlersForTest(undefined, undefined, undefined, vi.fn(), false);
       const previousConfig = {
         skills: { workshop: { autonomous: { mode: from } } },
@@ -2343,7 +2346,7 @@ describe("gateway hot reload model state", () => {
         }),
       ).resolves.toBe("applied");
 
-      await waitForFast(() => expect(reconcileHeartbeatJobs).toHaveBeenCalledWith(nextConfig));
+      await waitForFast(() => expect(reconcileSystemJobs).toHaveBeenCalledWith(nextConfig));
       expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
       expect(setState).toHaveBeenCalledOnce();
     },
@@ -2370,7 +2373,7 @@ describe("gateway hot reload model state", () => {
     try {
       await expect(
         applyHotReload(
-          createHotTailPlan({ restartHeartbeat: true }),
+          buildGatewayReloadPlan(["agents.defaults.heartbeat.every"]),
           { agents: { defaults: { maxConcurrent: 1 } } } as OpenClawConfig,
           {
             sourceConfig: { agents: { defaults: { maxConcurrent: 1 } } },
@@ -2405,7 +2408,7 @@ describe("gateway hot reload model state", () => {
         reconcileExitWatchers: vi.fn(async () => {}),
         reconcileStreamWatchers: vi.fn(async () => {}),
         stopStreamWatchers: vi.fn(async () => {}),
-        reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+        reconcileSystemJobs: vi.fn(async () => "converged" as const),
       });
       const { applyHotReload, setState } = createReloadHandlersForTest(logReload);
 
@@ -2440,7 +2443,7 @@ describe("gateway hot reload model state", () => {
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     };
     const secondCronState = {
       cron: { start: vi.fn(async () => {}), stop: vi.fn() },
@@ -2449,7 +2452,7 @@ describe("gateway hot reload model state", () => {
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     };
     hoisted.buildGatewayCronService
       .mockReturnValueOnce(firstCronState)
@@ -2581,6 +2584,7 @@ describe("gateway hot reload model state", () => {
         changedPaths: ["agents.defaults.heartbeat.target"],
         hotReasons: ["agents.defaults.heartbeat.target"],
         restartHeartbeat: true,
+        reconcileSystemJobs: true,
       }),
       nextConfig,
     );
@@ -2617,6 +2621,7 @@ describe("gateway hot reload model state", () => {
           changedPaths: ["agents.defaults.heartbeat.target"],
           hotReasons: ["agents.defaults.heartbeat.target"],
           restartHeartbeat: true,
+          reconcileSystemJobs: true,
         }),
         nextConfig,
       );
@@ -2663,6 +2668,7 @@ describe("gateway hot reload model state", () => {
         changedPaths: ["models.providers.openai.api"],
         hotReasons: ["models.providers.openai.api"],
         restartHeartbeat: true,
+        reconcileSystemJobs: true,
       }),
       nextConfig,
     );
@@ -5109,7 +5115,11 @@ describe("gateway Gmail hot reload handlers", () => {
         .mockImplementationOnce(() => {
           throw new Error("runtime publication refused");
         });
-      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+      const recoveryRequested = createDeferred();
+      const requestRecoveryRestart = vi.fn(() => {
+        recoveryRequested.resolve();
+        return { status: "emitted" as const };
+      });
       const reloader = startManagedGatewayConfigReloader({
         initialConfig,
         readSnapshot: async () => createValidConfigSnapshot(disabledConfig, "terminal-disable"),
@@ -5185,7 +5195,9 @@ describe("gateway Gmail hot reload handlers", () => {
         expect(policy.isEnabled()).toBe(false);
         expect(stopAndDrain).toHaveBeenCalledTimes(cronCleanupFails ? 1 : 0);
         if (cronCleanupFails) {
-          await waitForFast(() => expect(requestRecoveryRestart).toHaveBeenCalledOnce());
+          // Drive the idle poll without tying fake-clock progress to real polling ticks.
+          await vi.advanceTimersByTimeAsync(500);
+          await recoveryRequested.promise;
         }
         expect(requestRecoveryRestart).toHaveBeenCalledTimes(cronCleanupFails ? 1 : 0);
       } finally {
@@ -6179,7 +6191,7 @@ describe("gateway plugin hot reload handlers", () => {
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     };
     hoisted.buildGatewayCronService.mockImplementationOnce((params) => {
       events.push(`cron-build:${params?.env?.[envKey]}:${targetEnv[envKey]}`);
