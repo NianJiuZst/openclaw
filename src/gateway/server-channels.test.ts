@@ -30,7 +30,11 @@ import { registerPluginCommandInRegistry } from "../plugins/command-registration
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createPluginCommandRuntime } from "../plugins/plugin-command-runtime.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  requireActivePluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -279,7 +283,7 @@ function createManager(options?: {
   tryRecoverAutostartSuppression?: () => boolean;
   isClosing?: () => boolean;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
-  getPluginHttpRouteRegistry?: () => PluginRegistry;
+  getPluginRegistry?: () => PluginRegistry;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -294,6 +298,7 @@ function createManager(options?: {
   }
   const manager = createChannelManager({
     getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
+    getPluginRegistry: options?.getPluginRegistry ?? requireActivePluginChannelRegistry,
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
@@ -313,9 +318,6 @@ function createManager(options?: {
     ...(options?.isClosing ? { isClosing: options.isClosing } : {}),
     ...(options?.getNativeApprovalRuntime
       ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
-      : {}),
-    ...(options?.getPluginHttpRouteRegistry
-      ? { getPluginHttpRouteRegistry: options.getPluginHttpRouteRegistry }
       : {}),
   });
   createdManagers.push({ channelIds, manager });
@@ -381,7 +383,7 @@ describe("server-channels auto restart", () => {
     const registryA = installTestRegistry(a.plugin);
     const managerA = createManager({
       channelIds: ["discord", "slack"],
-      getPluginHttpRouteRegistry: () => registryA,
+      getPluginRegistry: () => registryA,
     });
     await managerA.startChannels();
     await waitForImmediate();
@@ -391,7 +393,7 @@ describe("server-channels auto restart", () => {
     const registryB = installTestRegistry(b.plugin, bOnly.plugin);
     const managerB = createManager({
       channelIds: ["discord", "slack"],
-      getPluginHttpRouteRegistry: () => registryB,
+      getPluginRegistry: () => registryB,
     });
     try {
       await managerB.startChannels();
@@ -2005,7 +2007,8 @@ describe("server-channels auto restart", () => {
           },
         }),
       );
-      const manager = createManager({ getPluginHttpRouteRegistry: () => routeRegistry });
+      routeRegistry.channels = registry.channels;
+      const manager = createManager({ getPluginRegistry: () => routeRegistry });
       await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
       const stopping = manager
         .stopChannel("discord", DEFAULT_ACCOUNT_ID)
@@ -2111,7 +2114,7 @@ describe("server-channels auto restart", () => {
       const registry = installTestRegistry(
         createTestPlugin({ startAccount, stopAccount, isConfigured }),
       );
-      const manager = createManager({ getPluginHttpRouteRegistry: () => registry });
+      const manager = createManager({ getPluginRegistry: () => registry });
       const server = createTestGatewayServer({
         resolvedAuth: AUTH_NONE,
         overrides: {
@@ -2761,6 +2764,7 @@ describe("server-channels auto restart", () => {
     const channelRuntimeEnvs = {} as Record<ChannelId, RuntimeEnv>;
     const manager = createChannelManager({
       getRuntimeConfig: () => ({}),
+      getPluginRegistry: requireActivePluginChannelRegistry,
       channelLogs,
       channelRuntimeEnvs,
     });

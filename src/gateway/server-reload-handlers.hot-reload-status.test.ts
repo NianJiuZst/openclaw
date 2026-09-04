@@ -10,6 +10,7 @@ import {
   getRuntimeAuthProfileStoreSnapshotsRevision,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
@@ -66,9 +67,11 @@ vi.mock("./config-reload.js", async () => {
 describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
   it("forwards live status and invalidates config.get on watcher commit", async () => {
     const initialConfig = { session: { store: "/tmp/sessions.json" } } as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
     const broadcast = vi.fn();
     const invalidateMentions = vi.fn();
     const reloader = startManagedGatewayConfigReloader({
+      getPluginRegistry: () => pluginRegistry,
       configRevisionProjector: {
         projectRawHash: (hash) => `opaque:${hash}`,
         projectResolvedHash: (hash) => `resolved:${hash}`,
@@ -106,12 +109,10 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       setState: vi.fn(),
       startChannel: vi.fn(async () => new Map()),
       stopChannel: vi.fn(async () => {}),
-      reloadPlugins: vi.fn(
-        async (): Promise<GatewayPluginReloadResult> => ({
-          restartChannels: new Set(),
-          activeChannels: new Set(),
-        }),
-      ),
+      reloadPlugins: vi.fn(async (): Promise<GatewayPluginReloadResult> => ({
+        restartChannels: new Set(),
+        activeChannels: new Set(),
+      })),
       logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       logChannels: { info: vi.fn(), error: vi.fn() },
       logCron: { error: vi.fn() },
@@ -134,7 +135,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       prepareTerminalConfig: vi.fn(),
       reconcileRuntimePolicy: vi.fn(),
-      commitTerminalConfig: vi.fn(),
+      commitRuntimePolicy: vi.fn(),
       acceptTerminalConfig: vi.fn(),
       clients: [],
     });

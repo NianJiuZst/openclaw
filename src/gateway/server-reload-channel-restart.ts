@@ -1,26 +1,19 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getLoadedChannelPluginEntryById } from "../channels/plugins/registry-loaded.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import type { StartChannelOptions } from "./server-channel-runtime.types.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { collectChannelOperationFailures } from "./server-reload-utils.js";
 
-async function startGatewayChannelFromActiveRegistry(
+async function startGatewayChannel(
   params: Pick<GatewayReloadHandlerParams, "startChannel">,
   channel: ChannelKind,
   accountId?: string,
   options: Pick<StartChannelOptions, "skipUnavailableAccounts"> = {},
 ): Promise<void> {
-  await withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
-    // Reload and rollback replace snapshots, not the operator's stopped intent.
-    runOutsideGatewayRootWorkAdmission(() =>
-      params.startChannel(channel, accountId, { preserveManualStop: true, ...options }),
-    ),
-  );
+  // The manager selects its attached registry; reload preserves the operator's stopped intent.
+  await params.startChannel(channel, accountId, { preserveManualStop: true, ...options });
 }
 
 export async function rollbackStoppedGatewayChannels(
@@ -34,7 +27,7 @@ export async function rollbackStoppedGatewayChannels(
     for (const accountId of accountIds) {
       try {
         params.logChannels.info(`restarting ${channel} account ${accountId} after ${reason}`);
-        await startGatewayChannelFromActiveRegistry(params, channel, accountId);
+        await startGatewayChannel(params, channel, accountId);
         accountIds.delete(accountId);
       } catch (err) {
         failures.push(`${channel}[${accountId}]`);
@@ -52,7 +45,7 @@ export async function rollbackStoppedGatewayChannels(
       channels: [...channels],
       run: async (channel) => {
         params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-        await startGatewayChannelFromActiveRegistry(params, channel);
+        await startGatewayChannel(params, channel);
         channels.delete(channel);
       },
       onFailure: (channel, err) => {
@@ -111,7 +104,7 @@ export async function restartGatewayChannels(options: {
       ) {
         continue;
       }
-      const plugin = getChannelPlugin(channel);
+      const plugin = getLoadedChannelPluginEntryById(channel, params.getPluginRegistry())?.plugin;
       let listedAccountIds: Set<string>;
       try {
         listedAccountIds = new Set(plugin?.config.listAccountIds(nextConfig) ?? []);
@@ -164,7 +157,7 @@ export async function restartGatewayChannels(options: {
         await params.stopChannel(channel, accountId, { manual: false });
       }
       if (!suppressed && !isLifecycleReloadAborted()) {
-        await startGatewayChannelFromActiveRegistry(params, channel, accountId, {
+        await startGatewayChannel(params, channel, accountId, {
           skipUnavailableAccounts: true,
         });
       }
@@ -190,7 +183,7 @@ export async function restartGatewayChannels(options: {
         await params.stopChannel(channel, undefined, { manual: false });
       }
       if (!suppressed && !isLifecycleReloadAborted()) {
-        await startGatewayChannelFromActiveRegistry(params, channel, undefined, {
+        await startGatewayChannel(params, channel, undefined, {
           skipUnavailableAccounts: true,
         });
       }
