@@ -2857,11 +2857,9 @@ describe("gateway hot reload superseded tail recovery", () => {
   it("rearms detached stale-tail recovery against an already accepted config", async () => {
     vi.useFakeTimers();
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-    const prepareRuntimeConfig = vi.fn(
-      async (): Promise<OpenClawConfig> => ({
-        logging: { level: "debug" },
-      }),
-    );
+    const prepareRuntimeConfig = vi.fn(async (): Promise<OpenClawConfig> => ({
+      logging: { level: "debug" },
+    }));
     const handlers = createReloadHandlersForTest(
       undefined,
       undefined,
@@ -6995,9 +6993,9 @@ describe("gateway plugin hot reload handlers", () => {
     const configRootCounts: number[] = [];
     const monitorStarts: string[] = [];
     const pruneInactiveChannelAccountState = vi.fn();
-    const plugins = ["telegram", "discord"].map((channel) => ({
-      ...createChannelTestPluginBase({ id: channel }),
-      gateway: {
+    const plugins = ["telegram", "discord"].map((channel) => {
+      const plugin: ChannelPlugin = createChannelTestPluginBase({ id: channel });
+      plugin.gateway = {
         startAccount: async () => {
           monitorStarts.push(channel);
         },
@@ -7007,8 +7005,9 @@ describe("gateway plugin hot reload handlers", () => {
             throw new Error("stop failed");
           }
         },
-      },
-    }));
+      };
+      return plugin;
+    });
     try {
       await withReloadChannelManager(
         plugins,
