@@ -96,4 +96,13 @@ describe("Windows MSYS2 Git native filesystem proof", () => {
     await expect(readGitBackupLog({ repositoryPath, limit: 10 })).resolves.toEqual([]);
     console.log("MSYS_BACKUP_INITIALIZE_ACL_PROOF passed");
   });
+
+  it("preserves native Git drive-rooted attribute paths", async () => {
+    const nativeGit = process.env.PROOF_NATIVE_GIT!;
+    const { stdout } = await execFileAsync(nativeGit, ["-C", repo, "-c", "core.attributesFile=/foo/attributes", "var", "GIT_ATTR_GLOBAL"], { encoding: "utf8" });
+    expect(stdout.trim()).toBe("/foo/attributes");
+    const { resolveGitPath } = await import("./git-path.js");
+    await expect(resolveGitPath(stdout.trim(), { env: { PATH: path.dirname(nativeGit) } })).resolves.toBe("/foo/attributes");
+    console.log("NATIVE_GIT_ROOTED_PATH_PROOF passed");
+  });
 });

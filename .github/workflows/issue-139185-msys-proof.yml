@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 6
+          fetch-depth: 20
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 26.8.1
@@ -35,12 +35,12 @@ jobs:
           $env:PATH = "$env:MSYS_ROOT\usr\bin;$env:PATH"
           where.exe git
           & "$env:MSYS_ROOT\usr\bin\git.exe" --version
-          $candidate = 'ffff08ab0927f98bc080ffdb49574c16fe8d52ae'
+          $candidate = '7c352e06155'
           $baseline = '3e4becea5e2ce38ede69e8ecf5302805ecbfc09c'
           & $nativeGit cat-file -e $baseline
           if ($LASTEXITCODE -ne 0) { throw 'Missing baseline commit' }
           $env:PROOF_NATIVE_GIT = $nativeGit
-          $files = & $nativeGit diff --name-only $baseline $candidate -- src
+          $files = & $nativeGit diff --name-only $baseline $candidate -- src | Where-Object { $_ -ne 'src/infra/git-path.msys-proof.test.ts' }
           & $nativeGit restore --source=$baseline -- $files
           if ($LASTEXITCODE -ne 0) { throw 'Baseline restore failed' }
           node scripts/run-vitest.mjs src/infra/git-path.msys-proof.test.ts 2>&1 | Tee-Object baseline-proof.log
