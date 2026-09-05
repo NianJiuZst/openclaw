@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { listGitWorktrees } from "../agents/worktrees/git.js";
+import { listGitWorktrees, runGit } from "../agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { initializeGitBackupRepository, readGitBackupLog } from "../snapshot/git-backup.js";
 
@@ -46,6 +46,7 @@ describe("Windows MSYS2 Git native filesystem proof", () => {
     expect(gitRoot).toMatch(/^\/(?!\/)/);
     expect(gitRoot).not.toBe(repo);
     console.log(`MSYS_DEPENDENCY_PROOF ${JSON.stringify({ nativeRoot: repo, gitRoot, version: await git(repo, "--version") })}`);
+    console.log(`MSYS_HEAD_PROBE ${JSON.stringify(await runGit(repo, ["rev-parse", "--verify", "HEAD^{commit}"]))}`);
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
