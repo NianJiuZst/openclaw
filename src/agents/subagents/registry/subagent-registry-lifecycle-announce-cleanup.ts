@@ -270,11 +270,6 @@ const finalizeSubagentCleanup = async (
       delivery.nextAttemptAt = undefined;
     }
     const finalDelivery = ensureDeliveryState(entry);
-    if (shouldCreditDelivery) {
-      finalDelivery.status = "delivered";
-      finalDelivery.suspendedAt = undefined;
-      finalDelivery.suspendedReason = undefined;
-    }
     if (shouldCreditDelivery && !options?.skipDeliveryStatus) {
       safeSetSubagentTaskDeliveryStatus(params, {
         entry,
@@ -412,11 +407,11 @@ export const startSubagentAnnounceCleanupFlow = (
     return true;
   }
   let suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
+  const cleanupGeneration = beginSubagentCleanup(context, runId);
+  if (cleanupGeneration === undefined) {
+    return false;
+  }
   if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {
-    const cleanupGeneration = beginSubagentCleanup(context, runId);
-    if (cleanupGeneration === undefined) {
-      return false;
-    }
     runDetachedCleanupAttempt(context, {
       runId,
       entry,
@@ -428,10 +423,6 @@ export const startSubagentAnnounceCleanupFlow = (
       },
     });
     return true;
-  }
-  const cleanupGeneration = beginSubagentCleanup(context, runId);
-  if (cleanupGeneration === undefined) {
-    return false;
   }
   const cleanupSessionEntry = suppressSessionEffects
     ? undefined
@@ -533,12 +524,16 @@ export const startSubagentAnnounceCleanupFlow = (
       await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
       return;
     }
-    const shouldCreditPriorDelivery =
-      announceOutcome !== "delivered" && (await hasPriorRequesterDeliveryMirror(params, entry));
+    const hasDeliveryMirror =
+      announceOutcome !== "delivered" &&
+      entry.delivery?.status !== "delivered" &&
+      (await hasPriorRequesterDeliveryMirror(params, entry));
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
       await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
       return;
     }
+    // Requester-settle can commit delivery while the mirror lookup is pending.
+    const shouldCreditPriorDelivery = entry.delivery?.status === "delivered" || hasDeliveryMirror;
     if (shouldCreditPriorDelivery) {
       latestDeliveryError = undefined;
     }
@@ -578,6 +573,7 @@ export const startSubagentAnnounceCleanupFlow = (
     isChildSessionEffectsAllowed: childSessionEffectsAllowed,
     isCompletionDeliveryAllowed: () =>
       entry.suppressCompletionDelivery !== true &&
+      entry.delivery?.status !== "delivered" &&
       context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
     isCompletionOwnedByRequesterYield: () =>
       entry.requesterTurnYielded === true ||
@@ -620,6 +616,10 @@ export const startSubagentAnnounceCleanupFlow = (
       const previousDropReason = entry.delivery?.lastDropReason;
       if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
         retireSupersededCleanupInBackground(context, runId, entry, cleanupGeneration);
+        return;
+      }
+      // A stale announce cannot replace a delivery already committed by requester-settle.
+      if (entry.delivery?.status === "delivered") {
         return;
       }
       recordAnnounceDeliveryResult(entry, delivery, params.runs);
