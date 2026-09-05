@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { createCommandError } from "../process/command-error.js";
 import { resolveCommandEnv } from "../process/exec-spawn.js";
@@ -19,12 +20,16 @@ export async function resolveGitPath(
     cwd: options.cwd,
     env: resolveCommandEnv({ argv: ["git"], baseEnv: options.baseEnv, env: options.env }),
   });
-  if (invocation.usesWindowsExitCodeShim) {
-    throw new Error(
-      "Cannot convert Git paths through a command wrapper. Put git.exe on PATH directly.",
-    );
+  const directory = path.win32.dirname(invocation.command);
+  // Native Git can also emit drive-rooted /paths (for example attributesFile).
+  // Only the MSYS/Cygwin installation layout gives those paths POSIX semantics.
+  if (
+    invocation.usesWindowsExitCodeShim ||
+    !["msys-2.0.dll", "cygwin1.dll"].some((dll) => existsSync(path.win32.join(directory, dll)))
+  ) {
+    return value;
   }
-  const converter = path.win32.join(path.win32.dirname(invocation.command), "cygpath.exe");
+  const converter = path.win32.join(directory, "cygpath.exe");
   const result = await runUtf8CommandWithTimeout([converter, "-w", "-C", "UTF8", "--", value], {
     ...options,
     timeoutMs: options.timeoutMs ?? 10_000,

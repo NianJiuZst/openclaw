@@ -1,3 +1,4 @@
+import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";
@@ -11,6 +12,9 @@ afterEach(() => {
 
 it("reads backup history when MSYS Git returns a Unix repository root", async () => {
   vi.stubGlobal("process", { ...process, platform: "win32" });
+  vi.spyOn(fsSync, "existsSync").mockImplementation((file) =>
+    String(file).endsWith("msys-2.0.dll"),
+  );
   const repository = "C:\\Users\\operator\\backup";
   const success = {
     code: 0,

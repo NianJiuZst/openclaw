@@ -1,3 +1,4 @@
+import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -24,6 +25,9 @@ it("preserves worktree identity and foreign locks from MSYS porcelain paths", as
     termination: "exit" as const,
   };
   try {
+    vi.spyOn(fsSync, "existsSync").mockImplementation((file) =>
+      String(file).endsWith("msys-2.0.dll"),
+    );
     vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
       ...success,
       stdout: "worktree /c/repo\0\0worktree /d/linked checkout\0locked other owner\0\0",

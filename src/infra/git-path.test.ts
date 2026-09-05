@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";
 import * as windowsCommand from "../process/windows-command.js";
@@ -30,6 +31,7 @@ it.each([
   ["/projects/测试 repo ", "E:\\mounted\\测试 repo "],
 ])("uses the selected Git installation's mount mapping for %s", async (value, nativePath) => {
   vi.stubGlobal("process", { ...process, platform: "win32" });
+  vi.spyOn(fs, "existsSync").mockImplementation((file) => String(file).endsWith("msys-2.0.dll"));
   const resolve = vi.spyOn(windowsCommand, "resolveSafeChildProcessInvocation").mockReturnValue({
     command: "D:\\MSYS installation\\usr\\bin\\git.exe",
     args: [],
@@ -62,6 +64,20 @@ it.each([
   await expect(resolveGitPath(value, options)).rejects.toThrow("cygpath: invalid path");
 });
 
+it("preserves native Git drive-rooted paths without invoking cygpath", async () => {
+  vi.stubGlobal("process", { ...process, platform: "win32" });
+  vi.spyOn(fs, "existsSync").mockReturnValue(false);
+  vi.spyOn(windowsCommand, "resolveSafeChildProcessInvocation").mockReturnValue({
+    command: "C:\\Program Files\\Git\\cmd\\git.exe",
+    args: [],
+    usesWindowsExitCodeShim: false,
+    windowsHide: true,
+  });
+  const convert = vi.spyOn(exec, "runUtf8CommandWithTimeout");
+  await expect(resolveGitPath("/foo/attributes")).resolves.toBe("/foo/attributes");
+  expect(convert).not.toHaveBeenCalled();
+});
+
 it("does not look for a converter next to cmd.exe for a Git wrapper", async () => {
   vi.stubGlobal("process", { ...process, platform: "win32" });
   vi.spyOn(windowsCommand, "resolveSafeChildProcessInvocation").mockReturnValue({
@@ -70,5 +86,7 @@ it("does not look for a converter next to cmd.exe for a Git wrapper", async () =
     usesWindowsExitCodeShim: true,
     windowsHide: true,
   });
-  await expect(resolveGitPath("/c/repo")).rejects.toThrow("Put git.exe on PATH directly");
+  const convert = vi.spyOn(exec, "runUtf8CommandWithTimeout");
+  await expect(resolveGitPath("/foo/attributes")).resolves.toBe("/foo/attributes");
+  expect(convert).not.toHaveBeenCalled();
 });
