@@ -1,4 +1,4 @@
-import * as fsSync from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";

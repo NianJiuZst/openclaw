@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { createCommandError } from "../process/command-error.js";
 import { resolveCommandEnv } from "../process/exec-spawn.js";
@@ -25,7 +25,7 @@ export async function resolveGitPath(
   // Only the MSYS/Cygwin installation layout gives those paths POSIX semantics.
   if (
     invocation.usesWindowsExitCodeShim ||
-    !["msys-2.0.dll", "cygwin1.dll"].some((dll) => existsSync(path.win32.join(directory, dll)))
+    !["msys-2.0.dll", "cygwin1.dll"].some((dll) => fs.existsSync(path.win32.join(directory, dll)))
   ) {
     return value;
   }

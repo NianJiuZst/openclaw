@@ -1,4 +1,4 @@
-import * as fsSync from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";

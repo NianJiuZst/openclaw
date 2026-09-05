@@ -1,4 +1,4 @@
-import * as fs from "node:fs";
+import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";
 import * as windowsCommand from "../process/windows-command.js";
