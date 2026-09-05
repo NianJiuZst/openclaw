@@ -3316,7 +3316,7 @@ describe("subagent registry lifecycle hardening", () => {
     await waitForLifecycleState(() => expect(entry.delivery?.status).toBe("suspended"));
   });
 
-  it("persists identified completion delivery before stalled announce bookkeeping settles", async () => {
+  it("persists identified completion delivery while completing the active multipart send", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({
       expectsCompletionMessage: true,
@@ -3324,19 +3324,28 @@ describe("subagent registry lifecycle hardening", () => {
         status: "pending",
         lastError: "earlier delivery failed",
         lastDropReason: "sink_unavailable",
+        nextAttemptAt: 13_000,
       },
     });
     let releaseAnnounce!: () => void;
     const announcePending = new Promise<void>((resolve) => {
       releaseAnnounce = resolve;
     });
+    const sentChunks: number[] = [];
     const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
       async (announceParams) => {
-        announceParams.onDeliveryResult?.({
-          delivered: true,
-          path: "direct",
-          deliveredAt: 12_300,
-        });
+        for (const chunk of [1, 2, 3]) {
+          if (announceParams.isCompletionDeliveryAllowed?.() === false) {
+            break;
+          }
+          sentChunks.push(chunk);
+          announceParams.onDeliveryResult?.({
+            delivered: true,
+            path: "direct",
+            deliveredAt: 12_300,
+          });
+          await Promise.resolve();
+        }
         await announcePending;
         return "delivered" as const;
       },
@@ -3366,9 +3375,11 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.delivery?.lastDropReason).toBeUndefined();
     expect(entry.cleanupCompletedAt).toBeUndefined();
     expect(persist).toHaveBeenCalledWith(entry.runId);
+    expect.soft(sentChunks).toEqual([1, 2, 3]);
 
     releaseAnnounce();
     await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.delivery?.nextAttemptAt).toBeUndefined();
   });
 
   it("keeps a late superseded-delivery retirement root-admitted", async () => {
@@ -4300,6 +4311,8 @@ describe("subagent registry lifecycle hardening", () => {
     { waitingOn: "announce", outcome: "retryable" },
     { waitingOn: "mirror", outcome: "intentional_non_delivery" },
     { waitingOn: "mirror", outcome: "retryable" },
+    { waitingOn: "active-send", outcome: "delivered" },
+    { waitingOn: "delivered-mirror", outcome: "retryable" },
   ] as const)(
     "preserves requester-settle delivery while $outcome cleanup awaits $waitingOn",
     async ({ waitingOn, outcome }) => {
@@ -4313,11 +4326,17 @@ describe("subagent registry lifecycle hardening", () => {
         delivery: { status: "pending", attemptCount: 1 },
       });
       entry.delivery!.payload = loadPendingFinalDeliveryPayload(entry);
-      const announce = createDeferredCore<void>();
+      const announce = createDeferredCore();
       const mirror = createDeferredCore<{ messages: unknown[] }>();
       const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
         async (params) => {
+          if (waitingOn === "active-send") {
+            params.onDeliveryResult?.({ delivered: true, path: "direct", deliveredAt: 12_345 });
+          }
           await announce.promise;
+          if (waitingOn === "active-send") {
+            return outcome;
+          }
           params.onDeliveryResult?.({
             delivered: false,
             path: "direct",
@@ -4345,7 +4364,7 @@ describe("subagent registry lifecycle hardening", () => {
       try {
         expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
         await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
-        if (waitingOn === "mirror") {
+        if (waitingOn === "mirror" || waitingOn === "delivered-mirror") {
           announce.resolve();
           await waitForLifecycleState(() =>
             expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
@@ -4365,12 +4384,27 @@ describe("subagent registry lifecycle hardening", () => {
           }),
         ).toBe(true);
         await waitForLifecycleState(() => expect(entry.delivery?.status).toBe("delivered"));
+        expect.soft(entry.delivery).toMatchObject({ payload: undefined, attemptCount: undefined });
         expect(entry.requesterSettleWake).toBeUndefined();
         expect(announceParams.isCompletionOwnedByRequesterYield?.()).toBe(false);
         expect.soft(announceParams.isCompletionDeliveryAllowed?.()).toBe(false);
 
         announce.resolve();
-        mirror.resolve({ messages: [] });
+        mirror.resolve({
+          messages:
+            waitingOn === "delivered-mirror"
+              ? [
+                  {
+                    role: "assistant",
+                    provider: "openclaw",
+                    model: "delivery-mirror",
+                    timestamp: 12_300,
+                    idempotencyKey: buildExpectedAnnounceIdempotencyKey(entry),
+                    content: "child timed out",
+                  },
+                ]
+              : [],
+        });
         await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
         expect(entry.delivery).toMatchObject({
           status: "delivered",
