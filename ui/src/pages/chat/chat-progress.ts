@@ -233,7 +233,7 @@ export function resolveWorkingProgress(
       .map((segment) => segment.ts),
     ...toolProgress
       .filter((message) => !explicitRunId || message?.runId === explicitRunId)
-      .map((message) => message?.__openclawToolStreamReceivedAt),
+      .map((message) => message?.["__openclawToolStreamReceivedAt"]),
   ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const startedAt = candidates.length > 0 ? Math.min(...candidates) : Date.now();
   const key =
