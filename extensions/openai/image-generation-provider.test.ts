@@ -1625,10 +1625,8 @@ describe("openai image generation provider", () => {
           },
         })),
       );
-      expect(jsonRequestCall().body.tools[0]).toMatchObject({
-        size: "2160x3840",
-        quality: "high",
-        output_format: "jpeg",
+      expect(jsonRequestCall().body).toMatchObject({
+        tools: [{ size: "2160x3840", quality: "high", output_format: "jpeg" }],
       });
     },
   );
