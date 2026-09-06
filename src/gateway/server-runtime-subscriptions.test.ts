@@ -47,12 +47,8 @@ import {
   registerChatAbortController,
   type ChatAbortControllerEntry,
 } from "./chat-abort.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
+import { createSubscriptionParams } from "./server-runtime-subscriptions.test-helpers.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
   agentTerminalOwner,
@@ -228,24 +224,7 @@ const sessionTaskDefaults = {
   notifyPolicy: "silent",
 } as const;
 
-function createParams(): SubscriptionParams {
-  return {
-    log: mockLog,
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    nodeSendToSession: vi.fn(),
-    agentRunSeq: new Map(),
-    ...(() => {
-      const chatRunState = createChatRunState();
-      return { chatRunState, toolEventRecipients: chatRunState.toolEventRecipients };
-    })(),
-    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    chatAbortControllers: new Map(),
-    restartRecoveryCandidates: new Map(),
-    terminalSessions: { closeTaskSessions: vi.fn() },
-  };
-}
+const createParams = () => createSubscriptionParams(mockLog);
 
 describe("startGatewayEventSubscriptions", () => {
   let unsubs: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
