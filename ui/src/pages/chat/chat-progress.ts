@@ -193,9 +193,11 @@ export function resolveWorkingProgress(
   streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
 ): WorkingProgress {
+  const pendingSends = queue.filter(
+    (item) => shouldRenderQueuedSendInThread(item) && !isQueuedSendInlineState(item),
+  );
   const queuedProgress =
-    queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item)) ??
-    queue.find(shouldRenderQueuedSendInThread);
+    pendingSends.find((item) => item.sendState === "sending") ?? pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
   const segmentRunId = streamSegments
     .map((segment) => segment.runId)
@@ -216,8 +218,13 @@ export function resolveWorkingProgress(
   const candidates = [
     compatibleCached?.startedAt,
     streamStartedAt,
-    ...queue
-      .filter(shouldRenderQueuedSendInThread)
+    // Only this turn owns its wait; retained or future sends cannot backdate it.
+    ...pendingSends
+      .filter((item) =>
+        explicitRunId
+          ? (item.sendRunId ?? item.pendingRunId) === explicitRunId
+          : item === queuedProgress,
+      )
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),
     ...streamSegments.map((segment) => segment.ts),

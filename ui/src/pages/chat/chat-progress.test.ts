@@ -13,6 +13,47 @@ describe("resolveWorkingProgress", () => {
   beforeEach(() => resetWorkingProgress());
   afterEach(() => resetWorkingProgress());
 
+  it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
+    "does not let an older %s send identify an unknown active turn",
+    (sendState) => {
+      expect(
+        resolveWorkingProgress(
+          SESSION,
+          null,
+          2_000,
+          [
+            {
+              id: "old-send",
+              text: "Review this send",
+              createdAt: 1_000,
+              sendRunId: "old-run",
+              sendAttempts: 1,
+              sendState,
+              sendError: "Review required",
+            },
+          ],
+          [],
+          [],
+        ),
+      ).toMatchObject({ runId: null, startedAt: 2_000 });
+    },
+  );
+
+  it("uses only the matching reconnect send when restoring an active turn", () => {
+    const queue = ["other-run", "active-run"].map((sendRunId, index) => ({
+      id: sendRunId,
+      text: "Reconnect send",
+      createdAt: (index + 1) * 1_000,
+      sendRunId,
+      sendState: "waiting-reconnect" as const,
+      sendAttempts: 1,
+    }));
+    expect(resolveWorkingProgress(SESSION, "active-run", 3_000, queue, [], [])).toMatchObject({
+      runId: "active-run",
+      startedAt: 2_000,
+    });
+  });
+
   it("prefers observed stream identity over a future queued send", () => {
     expect(
       resolveWorkingProgress(
@@ -23,7 +64,7 @@ describe("resolveWorkingProgress", () => {
           {
             id: "future-send",
             text: "Run next",
-            createdAt: 2_000,
+            createdAt: 500,
             sendRunId: "future-run",
             sendState: "waiting-reconnect",
             sendAttempts: 1,
@@ -32,7 +73,7 @@ describe("resolveWorkingProgress", () => {
         [{ ts: 1_000, runId: "active-run" }],
         [],
       ),
-    ).toMatchObject({ runId: "active-run" });
+    ).toMatchObject({ runId: "active-run", startedAt: 1_000 });
   });
 });
 
