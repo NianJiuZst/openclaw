@@ -1635,11 +1635,11 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     const buffer = Buffer.from("image bytes");
     const output = [{}, { size: "0x-1", quality: "not-quality", output_format: "bogus" }].map(
-      (settings) => ({
-        type: "image_generation_call",
-        result: buffer.toString("base64"),
-        ...settings,
-      }),
+      (settings) =>
+        Object.assign(
+          { type: "image_generation_call", result: buffer.toString("base64") },
+          settings,
+        ),
     );
     mockCodexRawStream(
       `data: ${JSON.stringify({ type: "response.completed", response: { output } })}\n\n`,
