@@ -1,14 +1,16 @@
-// File Transfer tests cover file fetch tool plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import {
   callGatewayTool,
   listNodes,
   resolveNodeIdFromList,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleFileFetch } from "../node-host/file-fetch.js";
 import { TEXT_INLINE_MAX_BYTES } from "../shared/mime.js";
@@ -45,6 +47,7 @@ async function executeFetchedNodeFile(params: {
   fileName: string;
   contents: string | Buffer;
   requestedPath?: string;
+  stage?: typeof saveMediaBuffer;
   tamperSha256?: boolean;
 }) {
   const tempRoot = await fs.realpath(os.tmpdir());
@@ -61,12 +64,13 @@ async function executeFetchedNodeFile(params: {
     vi.mocked(callGatewayTool).mockResolvedValue({
       payload: params.tamperSha256 ? { ...payload, sha256: "0".repeat(64) } : payload,
     });
-    const savedPath = `/gateway/media/tool-file-transfer/${params.fileName}`;
-    vi.mocked(saveMediaBuffer).mockResolvedValue({
-      id: "media-1",
-      path: savedPath,
-      size: payload.size,
-      contentType: payload.mimeType,
+    let savedPath = `/gateway/media/tool-file-transfer/${params.fileName}`;
+    vi.mocked(saveMediaBuffer).mockImplementation(async (...args) => {
+      const saved = params.stage
+        ? await params.stage(...args)
+        : { id: "media-1", path: savedPath, size: payload.size, contentType: payload.mimeType };
+      savedPath = saved.path;
+      return saved;
     });
     const result = await createFileFetchTool().execute("tool-call-1", {
       node: "node-1",
@@ -182,20 +186,71 @@ describe("file_fetch tool", () => {
     expect(saveMediaBuffer).not.toHaveBeenCalled();
   });
 
-  it("preserves the canonical filename when staging fetched media", async () => {
-    const { payload } = await executeFetchedNodeFile({
-      fileName: "report.md",
-      contents: "quarterly report\n",
-      requestedPath: "/requested/report-alias.md",
-    });
+  it.each([
+    { fileName: "Quarterly report.md", expectedName: "Quarterly_report.md" },
+    { fileName: "train.py", expectedName: "train.txt" },
+    { fileName: "report.xlsx", expectedName: "report.xlsx" },
+  ])(
+    "keeps the canonical basename through real staging and forwarding: $fileName",
+    async (testCase) => {
+      await withTempHome(async () => {
+        const { saveMediaBuffer: stage } = await vi.importActual<
+          typeof import("openclaw/plugin-sdk/media-store")
+        >("openclaw/plugin-sdk/media-store");
+        const contents = testCase.fileName.endsWith(".xlsx")
+          ? await new JSZip()
+              .file(
+                "[Content_Types].xml",
+                '<Types><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>',
+              )
+              .file("xl/workbook.xml", "<workbook/>")
+              .generateAsync({ type: "nodebuffer" })
+          : Buffer.from("quarterly report\n");
+        const fetched = await executeFetchedNodeFile({
+          ...testCase,
+          contents,
+          requestedPath: "/requested/report-alias.md",
+          stage,
+        });
+        const forwarded = await loadWebMedia(fetched.savedPath);
+        expect(forwarded.fileName).toBe(testCase.expectedName);
+        expect(forwarded.buffer).toEqual(contents);
+        expect(fetched.result.details).toMatchObject({
+          path: fetched.payload.path,
+          localPath: fetched.savedPath,
+          media: { mediaUrls: [fetched.savedPath] },
+        });
+        const repeated = await executeFetchedNodeFile({ ...testCase, contents, stage });
+        expect(repeated.savedPath).not.toBe(fetched.savedPath);
+        expect((await loadWebMedia(repeated.savedPath)).fileName).toBe(testCase.expectedName);
+      });
+    },
+  );
 
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      expect.any(Buffer),
-      payload.mimeType,
-      FILE_TRANSFER_SUBDIR,
-      expect.any(Number),
-      payload.path,
-    );
+  it("keeps Windows node basenames through real staging", async () => {
+    await withTempHome(async () => {
+      const { saveMediaBuffer: stage } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/media-store")
+      >("openclaw/plugin-sdk/media-store");
+      vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
+      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+      vi.mocked(callGatewayTool).mockResolvedValue({
+        payload: textPayload({
+          path: String.raw`C:\Reports\Monthly report.md`,
+          mimeType: "text/markdown",
+          text: "monthly report\n",
+        }),
+      });
+      vi.mocked(saveMediaBuffer).mockImplementation(stage);
+      const result = await createFileFetchTool().execute("tool-call-1", {
+        node: "node-1",
+        path: String.raw`C:\Selected\report-alias.md`,
+      });
+      const { localPath } = result.details as { localPath: string };
+      const forwarded = await loadWebMedia(localPath);
+      expect(forwarded.fileName).toBe("Monthly_report.md");
+      expect(forwarded.buffer).toEqual(Buffer.from("monthly report\n"));
+    });
   });
 
   it("wraps inline text file contents as external content", async () => {
