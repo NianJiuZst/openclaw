@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { buildLaunchAgentPlist } from "../../daemon/launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
 import {
   resolveLaunchAgentPlistPath,
   resolveLaunchAgentEnvFilePath,
@@ -60,9 +61,7 @@ const mocks = vi.hoisted(() => ({
   child: vi.fn<typeof import("../../process/exec.js").runCommandWithTimeout>(),
   health: vi.fn<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>(),
   doctor: vi.fn(),
-  configSnapshot: vi.fn(async () => {
-    throw new Error("Unexpected config snapshot during preserved activation");
-  }),
+  configSnapshot: vi.fn<() => Promise<void>>(),
   error: vi.fn(),
   log: vi.fn(),
   capability:
@@ -82,6 +81,7 @@ vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
 }));
 vi.mock("../../daemon/launchd-current-service.js", () => ({
   isCurrentProcessLaunchdServiceLabel: () => mocks.inLaunchd,
+  isCurrentProcessInsideLaunchdService: async () => mocks.inLaunchd,
 }));
 vi.mock("../../daemon/launchd-restart-handoff.js", () => ({
   scheduleDetachedLaunchdRestartHandoff: mocks.handoff,
@@ -132,6 +132,10 @@ vi.mock("../../daemon/systemd-definition-mutation.js", () => ({
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandWithTimeout: mocks.child,
+  runExec: vi.fn(
+    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input),
+  ),
 }));
 vi.mock("../../infra/gateway-processes.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/gateway-processes.js")>()),
@@ -236,6 +240,9 @@ beforeEach(async () => {
     return { code: 0, stdout: "", stderr: "", signal: null, killed: false, termination: "exit" };
   });
   mocks.health.mockImplementation(async ({ port }) => readyRecoveryHealth(port, mocks.running));
+  mocks.configSnapshot
+    .mockReset()
+    .mockRejectedValue(new Error("Unexpected config snapshot during preserved activation"));
 });
 afterEach(async () => {
   envSnapshot.restore();

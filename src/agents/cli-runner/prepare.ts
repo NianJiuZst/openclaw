@@ -138,6 +138,7 @@ import {
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import { runCliCleanup } from "./cleanup.js";
 import {
   resolveBundledCliBackendAuthPolicy,
   type BundledCliBackendAuthPolicy,
@@ -1862,7 +1863,6 @@ export async function prepareCliRunContext(
             workspaceDir,
             cwd,
             config: params.config,
-            defaultThinkLevel: params.thinkLevel,
             extraSystemPrompt,
             sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
@@ -2218,7 +2218,9 @@ export async function prepareCliRunContext(
     };
   } catch (err) {
     try {
-      await cleanupPreparedResources?.();
+      await runCliCleanup(params, "cli-prepare-failure", async () => {
+        await cleanupPreparedResources?.();
+      });
     } catch (cleanupErr) {
       cliBackendLog.warn(`cli backend cleanup after prepare failure failed: ${String(cleanupErr)}`);
     }

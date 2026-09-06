@@ -37,6 +37,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   conversations: () => import("./conversations.js").then((module) => module.conversationHandlers),
   connect: () => import("./connect.js").then((module) => module.connectHandlers),
   "control-ui": () => import("./control-ui.js").then((module) => module.controlUiHandlers),
+  "plugins-control-ui": () =>
+    import("./plugins-control-ui.js").then((module) => module.pluginsControlUiHandlers),
   cron: () => import("./cron.js").then((module) => module.cronHandlers),
   devices: () => import("./devices.js").then((module) => module.deviceHandlers),
   "device-pair-setup": () =>
@@ -69,6 +71,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "plugin-host-hooks": () =>
     import("./plugin-host-hooks.js").then((module) => module.pluginHostHookHandlers),
   plugins: () => import("./plugins.js").then((module) => module.pluginsHandlers),
+  "plugins-mutations": () =>
+    import("./plugins-mutations.js").then((module) => module.pluginMutationHandlers),
   projects: () => import("./projects.js").then((module) => module.projectsHandlers),
   portals: () => import("./portals.js").then((module) => module.portalHandlers),
   "progress-card": () => import("./progress-card.js").then((module) => module.progressCardHandlers),

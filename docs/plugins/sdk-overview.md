@@ -22,7 +22,29 @@ reference for **what to import** and **what you can register**.
 Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins). Use [Channel plugins](/plugins/sdk-channel-plugins) for channels, [Provider plugins](/plugins/sdk-provider-plugins) for model providers, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, [Agent harness plugins](/plugins/sdk-agent-harness) for native agent executors, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hooks.
 </Tip>
 
+## API stability
+
+All OpenClaw plugin APIs are **experimental**. This includes every
+`openclaw/plugin-sdk/*` subpath, registration and runtime APIs, channel and
+provider contracts, hooks, and native Control UI APIs. These contracts can
+change between OpenClaw releases.
+
+Pin the OpenClaw version used to develop and deploy your plugin, and test each
+host version you declare compatible. Set package compatibility ranges from
+those tested versions; do not assume a working build supports future releases.
+Existing [compatibility windows and upgrade migrations](/plugins/compatibility)
+still apply. Experimental status does not remove a documented migration path.
+
+Native UI from user-installed plugins also requires the default-off
+[Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui).
+Backend plugin APIs and ordinary plugin loading do not require that setting.
+
 ## Import convention
+
+For features with native Control UI, use [Feature plugins](/plugins/feature-plugins):
+`feature-contract` defines shared operations, `feature-plugin` registers their
+backend implementations, and `control-ui` exposes browser contribution and
+replacement contracts.
 
 Always import from a specific subpath:
 
@@ -271,6 +293,26 @@ advertised node command.
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
+
+#### SQLite write admission
+
+`runSqliteImmediateTransaction(db, prepare, options?)` from
+`openclaw/plugin-sdk/sqlite-runtime` waits for write admission without blocking
+the event loop. Its asynchronous `prepare` function may run more than once when
+another writer holds the database. Keep preparation repeatable: read and plan
+there, then return a **synchronous** transaction callback. Revalidate current
+owner and row predicates inside that callback before writing.
+
+Returning `undefined` from preparation skips the write and resolves the helper
+to `undefined`, even while another writer remains active. Otherwise, the helper
+resolves to the transaction callback's result. It rejects an already active
+transaction or preparation that leaves a transaction open. Once admitted, the
+callback runs once; callback and commit failures are never replayed.
+
+Admission retries use the connection's existing `busy_timeout`; this is not a
+total deadline for preparation or transaction execution. `options` supplies the
+same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
+database handle and its owning operation alive until the returned promise settles.
 
 #### Webhook body rejection
 

@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
+import { controlUiSource } from "../src/plugins/package-manifest.js";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
@@ -29,6 +30,9 @@ const repositoryScriptEntries = [
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
+  "scripts/check-plugin-sdk-exports.mts!",
+  // openclaw-performance.yml invokes the paired benchmark CLI by path.
+  "scripts/vitest-pair-benchmark.mts!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
   "scripts/cloudflare/src/index.ts!",
   // Invoked by the documented macOS Computer Use live-proof shell rig.
@@ -129,7 +133,6 @@ const repositoryScriptEntries = [
   "scripts/run-stylelint.mts!",
   // Path-spawned test roots are development entries; `!` would audit dev tools as production.
   "scripts/run-vitest-child.mts",
-  "scripts/test-projects-child.mts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
@@ -191,6 +194,7 @@ const rootEntries = [
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
+  "src/config/sessions/disk-budget.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
@@ -232,6 +236,8 @@ const rootEntries = [
   "src/mcp/plugin-tools-serve.ts!",
   // Dedicated tsdown entry exercised against built plugin singletons.
   "src/plugins/build-smoke-entry.ts!",
+  // Released Gateways still import this stable entry after an on-disk update.
+  "src/gateway/plugin-channel-reload-targets.ts!",
   // Package-script owners invoke these generated-artifact modules directly.
   "src/config/doc-baseline.ts!",
   "src/plugins/runtime-sidecar-paths-baseline.ts!",
@@ -279,6 +285,7 @@ const bundledPluginEntries = [
   // Provider catalogs and web tools resolve these manifest/convention-owned
   // modules from the plugin root at runtime.
   "provider-discovery.ts!",
+  "capability-catalog.ts!",
   "{web-search,web-fetch}-provider.ts!",
   "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
   "subagent-hooks-api.ts!",
@@ -453,7 +460,6 @@ const config = {
     "src/plugins/interactive-registry.ts": ["exports"],
     "src/plugins/memory-state.ts": ["exports", "types"],
     "src/plugins/session-discussion-registry.ts": ["exports"],
-    "src/tasks/detached-task-runtime-state.ts": ["exports"],
     // Focused Control UI tests consume these explicit state-machine seams;
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.ts": ["exports"],
@@ -858,6 +864,10 @@ const config = {
       "src/profile-evidence-sharding.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/slack`]: bundledPluginWorkspace([
+      // The vendor integrity test executes this verifier by path.
+      "scripts/verify-official-skills.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tencent`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/vllm`]: bundledPluginWorkspace(),
@@ -898,4 +908,23 @@ const config = {
   },
 } as const;
 
-export default config;
+const configuredWorkspaces = new Map(Object.entries(config.workspaces));
+// Browser roots come from authoring metadata; the runtime manifest names only
+// compiled assets. Keep each plugin's remaining files subject to reachability.
+const browserWorkspaces = Object.fromEntries(
+  fs
+    .globSync(`${BUNDLED_PLUGIN_ROOT_DIR}/*/package.json`)
+    .toSorted()
+    .flatMap((manifestPath) => {
+      const source = controlUiSource(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
+      if (!source) {
+        return [];
+      }
+      const workspace = path.dirname(manifestPath).replaceAll("\\", "/");
+      const settings =
+        configuredWorkspaces.get(workspace) ?? config.workspaces[`${BUNDLED_PLUGIN_ROOT_DIR}/*`];
+      return [[workspace, { ...settings, entry: [...settings.entry, `${source}!`] }]];
+    }),
+);
+
+export default { ...config, workspaces: { ...config.workspaces, ...browserWorkspaces } };
