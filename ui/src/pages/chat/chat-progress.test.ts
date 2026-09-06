@@ -91,6 +91,14 @@ describe("resolveWorkingProgress", () => {
     expect(submitted).toMatchObject({ runId: "new-run", startedAt: 60_000 });
   });
 
+  it("preserves anonymous progress when the same turn gains an identity", () => {
+    const anonymous = resolveWorkingProgress(SESSION, null, null, [], [{ ts: 1_000 }], []);
+    expect(resolveWorkingProgress(SESSION, "active-run", 2_000, [], [{ ts: 1_000 }], [])).toEqual({
+      ...anonymous,
+      runId: "active-run",
+    });
+  });
+
   it.each(["other-run", undefined])(
     "ignores stream and tool timing without matching ownership (%s)",
     (runId) => {
