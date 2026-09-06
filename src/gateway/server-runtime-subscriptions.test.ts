@@ -27,6 +27,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { emitProgressCardReset } from "../session-cards/progress-card-events.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   emitSessionTranscriptUpdate,
@@ -280,6 +281,21 @@ describe("startGatewayEventSubscriptions", () => {
     resetAgentEventsForTest();
     resetTaskRegistryForTests({ persist: false });
     configureExecutionIdentityAdmissionSink(() => false)();
+  });
+
+  it("invalidates reset cards for their owner and stops on unsubscribe", () => {
+    const params = createParams();
+    unsubs = startGatewayEventSubscriptions(params);
+    emitProgressCardReset({ sessionKey: "global", agentId: "work" });
+    expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
+      "progressCard.changed",
+      { sessionKey: "agent:work:global", revision: null },
+      { sessionKeys: ["global"], agentId: "work" },
+    );
+    unsubs.lifecycleUnsub();
+    vi.mocked(params.broadcast).mockClear();
+    emitProgressCardReset({ sessionKey: "global", agentId: "work" });
+    expect(params.broadcast).not.toHaveBeenCalled();
   });
 
   it("broadcasts suspension immediately and stops with the gateway lifecycle", () => {
