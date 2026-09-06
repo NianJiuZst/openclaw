@@ -190,6 +190,7 @@ describe("file_fetch tool", () => {
     { fileName: "Quarterly report.md", expectedName: "Quarterly_report.md" },
     { fileName: "train.py", expectedName: "train.txt" },
     { fileName: "report.xlsx", expectedName: "report.xlsx" },
+    { fileName: "\u1100\u1161.txt", expectedName: "\uac00.txt" },
   ])(
     "keeps the canonical basename through real staging and forwarding: $fileName",
     async (testCase) => {
