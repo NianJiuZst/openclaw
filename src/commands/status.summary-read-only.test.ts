@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate as flushImmediate } from "node:timers/promises";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
@@ -107,8 +108,8 @@ describe("getStatusSummary read-only session access", () => {
     },
   );
 
-  it.each(["sessions.json", "shared.sqlite"])(
-    "reports each agent's activity and reads each physical session store once for %s",
+  it.each(["sessions.json", "shared.sqlite", "{agentId}/sessions.json"])(
+    "reports activity and yields between physical session store reads for %s",
     async (fileName) => {
       const tempDir = tempDirs.make("openclaw-status-session-stores-");
       const storePath = path.join(tempDir, fileName);
@@ -131,14 +132,28 @@ describe("getStatusSummary read-only session access", () => {
         closeOpenClawAgentDatabasesForTest();
 
         const expectedPaths = ["main", "ops"].map(
-          (agentId) => resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path,
+          (agentId) =>
+            resolveSqliteTargetFromSessionStorePath(
+              resolveSessionStorePathCore(storePath, { agentId }),
+              { agentId },
+            ).path,
         );
         const uniquePaths = [...new Set(expectedPaths)];
-        const readSummary = vi.spyOn(sessionAccessor, "readSessionStoreSummaryReadOnly");
+        const completedReads: number[] = [];
+        const originalReadSummary = sessionAccessor.readSessionStoreSummaryReadOnly;
+        const readSummary = vi
+          .spyOn(sessionAccessor, "readSessionStoreSummaryReadOnly")
+          .mockImplementation((...args) => {
+            const result = originalReadSummary(...args);
+            setImmediate(() => completedReads.push(readSummary.mock.calls.length));
+            return result;
+          });
         const now = vi.spyOn(Date, "now").mockReturnValue(100);
         try {
           const summary = await getStatusSummary({ includeChannelSummary: false, config });
+          await flushImmediate();
 
+          expect(completedReads).toEqual(uniquePaths.map((_, index) => index + 1));
           expect(summary.sessions.count).toBe(2);
           expect(summary.sessions.paths).toEqual(uniquePaths);
           expect(
@@ -155,7 +170,10 @@ describe("getStatusSummary read-only session access", () => {
           expect(readSummary).toHaveBeenCalledTimes(uniquePaths.length);
 
           readSummary.mockClear();
+          completedReads.length = 0;
           const { agentStatus: local } = await collectStatusLocalSnapshot(config);
+          await flushImmediate();
+          expect(completedReads).toEqual(uniquePaths.map((_, index) => index + 1));
           expect(local.totalSessions).toBe(2);
           expect(
             local.agents.map((agent) => [
