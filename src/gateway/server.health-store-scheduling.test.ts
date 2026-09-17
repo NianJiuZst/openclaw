@@ -105,7 +105,7 @@ test.each(["separate", "shared", "single", "empty"] as const)(
               if (layout === "shared" && !inserted) {
                 write = flushImmediate().then(() => {
                   const database = expectDefined(
-                    getOpenClawAgentDatabaseIfOpen({ path: storeFor("fleet0") }),
+                    getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storeFor("fleet0") }),
                     "shared database",
                   );
                   expect(database.db.isTransaction).toBe(false);
@@ -141,8 +141,8 @@ test.each(["separate", "shared", "single", "empty"] as const)(
             expect(
               sessions.byAgent.map((agent) => [agent.agentId, agent.count, agent.recent.length]),
             ).toEqual(
-              [...agentIds]
-                .sort()
+              agentIds
+                .toSorted()
                 .map((agentId) => [agentId, agentId === "fleet11" && inserted ? 13 : 12, 10]),
             );
             for (const agent of sessions.byAgent) {
