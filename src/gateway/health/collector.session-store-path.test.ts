@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate as flushImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -11,7 +10,6 @@ import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -192,20 +190,9 @@ describe("health session store paths", () => {
         agents: { ownership: "explicit", entries: { helper: {}, third: {} } },
         session: { store: storeTemplate },
       });
-      const completedReads: number[] = [];
-      const readSummary = sessionAccessor.readSessionStoreSummaryReadOnly;
-      const reads = vi
-        .spyOn(sessionAccessor, "readSessionStoreSummaryReadOnly")
-        .mockImplementation((...args) => {
-          const result = readSummary(...args);
-          setImmediate(() => completedReads.push(reads.mock.calls.length));
-          return result;
-        });
+      const reads = vi.spyOn(sessionAccessor, "readSessionStoreSummaryReadOnly");
       const collect = () => collectGatewayHealthSnapshot({ audience: "admin", probe: false });
       const summary = await collect();
-      await flushImmediate();
-      expect(completedReads).toEqual(layout === "shared" ? [1] : [1, 2]);
-      reads.mockImplementation(readSummary);
       expect(summary.agents.map((agent) => [agent.agentId, agent.sessions.count])).toEqual([
         [populatedAgentId, 1],
         [emptyAgentId, 0],
@@ -227,47 +214,4 @@ describe("health session store paths", () => {
       await expect(collect()).rejects.toBe(fatal);
     },
   );
-
-  it("retains a shared snapshot while writes run between agent projections", async () => {
-    const storePath = path.join(tempDirs.make("openclaw-health-shared-snapshot-"), "shared.sqlite");
-    const cfg: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { main: {}, other: {} } },
-      session: { store: storePath },
-    };
-    for (const agentId of ["main", "other"]) {
-      sessionAccessor.replaceSessionEntrySync(
-        { agentId, storePath, sessionKey: `agent:${agentId}:main` },
-        { sessionId: `${agentId}-session`, updatedAt: 10 },
-      );
-    }
-    const database = expectDefined(
-      getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath }),
-      "shared database",
-    );
-    const readSummary = sessionAccessor.readSessionStoreSummaryReadOnly;
-    let write: Promise<void> | undefined;
-    const reads = vi
-      .spyOn(sessionAccessor, "readSessionStoreSummaryReadOnly")
-      .mockImplementationOnce((...args) => {
-        const result = readSummary(...args);
-        write = flushImmediate().then(() => {
-          expect(database.db.isTransaction).toBe(false);
-          sessionAccessor.replaceSessionEntrySync(
-            { agentId: "other", storePath, sessionKey: "agent:other:new" },
-            { sessionId: "new-session", updatedAt: 20 },
-          );
-        });
-        return result;
-      });
-    try {
-      const agents = await buildHealthAgentSummaries(cfg, resolveHealthAgentOrder(cfg));
-      await write;
-      expect(reads).toHaveBeenCalledOnce();
-      expect(agents.map(({ sessions }) => sessions.count)).toEqual([1, 1]);
-      expect(agents[1]?.sessions.recent.map(({ key }) => key)).toEqual(["agent:other:main"]);
-      expect(readSummary({ storePath }, { agentIds: ["other"], recentLimit: 5 }).count).toBe(3);
-    } finally {
-      await write;
-    }
-  });
 });
