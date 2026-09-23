@@ -41,6 +41,10 @@ import {
   listManagedImageOriginalMediaIdsInDatabase,
 } from "../gateway/managed-image-record-store.kernel.js";
 import {
+  executeManagedImageMutation,
+  isManagedImageMutation,
+} from "../gateway/managed-image-record-store.worker.js";
+import {
   executeOperatorApprovalCommand,
   isOperatorApprovalCommand,
 } from "../gateway/operator-approval-store.worker.js";
@@ -466,6 +470,9 @@ export function executeSharedStateCommand(
     }
     default:
       break;
+  }
+  if (isManagedImageMutation(command)) {
+    return executeManagedImageMutation(command, { database, path: context.databasePath });
   }
   if (command.type === "managedImages.read") {
     return readManagedImageRecordInDatabase(database.db, command.input.attachmentId);
