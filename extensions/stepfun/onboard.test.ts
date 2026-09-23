@@ -1,3 +1,4 @@
+import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import { describe, expect, it } from "vitest";
 import {
   applyStepFunPlanConfig,
@@ -41,6 +42,33 @@ describe.each([
       expect(config.agents?.defaults?.models?.[`${provider}/step-3.5-flash`]).toEqual({});
       expect(config.agents?.defaults?.models?.[`${provider}/step-5-preview`]?.alias).toBeDefined();
       expect(apply(config)).toEqual(config);
+    },
+  );
+
+  it.each(["original", "padded", "lowercase"])(
+    "preserves an existing %s alias through repeated setup and model resolution",
+    (variant) => {
+      const alias = provider === "stepfun" ? "StepFun" : "StepFun Plan";
+      const existingAlias =
+        variant === "padded"
+          ? `  ${alias}  `
+          : variant === "lowercase"
+            ? alias.toLowerCase()
+            : alias;
+      const previousRef = `${provider}/step-3.5-flash`;
+      const model = { primary: alias, fallbacks: [alias.toLowerCase()] };
+      const config = apply({
+        agents: { defaults: { model, models: { [previousRef]: { alias: existingAlias } } } },
+      });
+      expect(apply(config)).toEqual(config);
+      expect(config.agents?.defaults?.model).toEqual(model);
+      const aliasIndex = buildModelAliasIndex({ cfg: config, defaultProvider: provider });
+      for (const raw of [model.primary, ...model.fallbacks]) {
+        expect(
+          resolveModelRefFromString({ raw, cfg: config, defaultProvider: provider, aliasIndex })
+            ?.ref,
+        ).toEqual({ provider, model: "step-3.5-flash" });
+      }
     },
   );
 
