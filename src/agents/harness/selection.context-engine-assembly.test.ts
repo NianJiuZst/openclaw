@@ -37,14 +37,14 @@ vi.mock("./builtin-openclaw.js", () => ({
 }));
 
 let state: OpenClawTestState;
-let admission: PreparedAgentRunAdmission;
+let runAdmission: PreparedAgentRunAdmission;
 let admittedRunContext: AdmittedRunContext;
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "harness-context-engine-assembly" });
   resetAgentRunRegistryForTest();
   resetPluginRuntimeStateForTest();
-  admission = prepareAgentRunAdmission({
+  runAdmission = prepareAgentRunAdmission({
     cfg: {},
     facts: {
       runId: "assembly-run",
@@ -53,11 +53,11 @@ beforeEach(async () => {
     },
     operationalRunInstance: createOperationalRunInstanceRef("assembly-run"),
   });
-  admittedRunContext = await admission.admit("plugin-harness", "harness-assembly-test");
+  admittedRunContext = await runAdmission.admit("plugin-harness", "harness-assembly-test");
 });
 
 afterEach(async () => {
-  admission.close();
+  runAdmission.close();
   clearAgentHarnesses();
   resetAgentRunRegistryForTest();
   resetPluginRuntimeStateForTest();
