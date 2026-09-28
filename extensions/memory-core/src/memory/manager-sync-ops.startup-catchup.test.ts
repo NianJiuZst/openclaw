@@ -2,6 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
@@ -187,6 +188,47 @@ describe("session startup catch-up", () => {
     await expect(harness.catchUp()).resolves.toEqual([]);
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
   });
+
+  it.each(["startup catch-up", "session update batch"] as const)(
+    "keeps %s pending until its accepted session sync finishes",
+    async (trigger) => {
+      const session = await writeSqliteSession();
+      const syncFinishing = createDeferred<void>();
+      const releaseSync = createDeferred<void>();
+      const harness = new (class extends SessionStartupCatchupHarness {
+        protected override async sync(params?: MemorySyncParams): Promise<void> {
+          await super.sync(params);
+          syncFinishing.resolve();
+          await releaseSync.promise;
+        }
+      })([], true);
+      if (trigger === "session update batch") {
+        harness.addPendingSessionTarget({
+          agentId: "main",
+          sessionId: session.sessionId,
+          sessionKey: session.sessionKey,
+        });
+      }
+      let completed = false;
+      const operation = (
+        trigger === "startup catch-up" ? harness.catchUp() : harness.processPendingSessionUpdates()
+      ).then(() => {
+        completed = true;
+      });
+
+      try {
+        await syncFinishing.promise;
+        expect(completed, "background work finished before its session sync settled").toBe(false);
+        releaseSync.resolve();
+        await operation;
+        expect(harness.indexedPaths).toEqual([session.corpusPath]);
+        expect(harness.indexedContents).toEqual(["User: startup catchup"]);
+      } finally {
+        releaseSync.resolve();
+        await operation;
+      }
+    },
+  );
 
   it("prunes indexed sessions that are absent from the live corpus", async () => {
     const stalePath = "sessions/main/deleted.jsonl";

@@ -1,23 +1,30 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { createMemoryBackgroundContext } from "./background-context.js";
 import { MemoryFileWatcher } from "./file-watcher.js";
 import { MemoryManagerSyncBase } from "./manager-sync-base.js";
 
 const log = createSubsystemLogger("memory");
 
-function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
-  void sync().catch((err: unknown) => {
-    log.warn(`memory sync failed (${reason}): ${String(err)}`);
-  });
-}
-
 export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
+  protected readonly runInBackground = createMemoryBackgroundContext();
   private fileWatcher: MemoryFileWatcher | undefined;
   protected memoryWatcherReady: Promise<void> = Promise.resolve();
   private remoteWatchRetirement: Promise<void> | undefined;
   private remoteWatchCloseFailure: { error: unknown } | undefined;
   protected get memoryWatchCapacityDegraded(): boolean {
     return this.fileWatcher?.capacityDegraded ?? false;
+  }
+
+  protected async runBackgroundTask(
+    run: () => void | Promise<unknown>,
+    errorMessage: string,
+  ): Promise<void> {
+    try {
+      await this.runInBackground(run);
+    } catch (err) {
+      log.warn(`${errorMessage}: ${String(err)}`);
+    }
   }
 
   protected ensureWatcher() {
@@ -34,10 +41,12 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         if (subscription.signal.aborted || this.closed) {
           return;
         }
-        this.markMemoryWatchDirty();
-        this.memoryWatchUnavailable ||= event === "unavailable";
-        // Remote notifications have already passed native file settling on the host.
-        runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
+        void this.runBackgroundTask(() => {
+          this.markMemoryWatchDirty();
+          this.memoryWatchUnavailable ||= event === "unavailable";
+          // Remote notifications have already passed native file settling on the host.
+          return this.sync({ reason: "watch" });
+        }, "memory sync failed (watch)");
       };
       this.remoteWatchRetirement = this.memoryFiles
         .watch(
@@ -75,10 +84,11 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       agentId: this.agentId,
       settings: this.settings,
       onDirty: () => this.markMemoryWatchDirty(),
-      onChange: () => {
-        this.markMemoryWatchDirty();
-        return this.sync({ reason: "watch" });
-      },
+      onChange: () =>
+        this.runInBackground(() => {
+          this.markMemoryWatchDirty();
+          return this.sync({ reason: "watch" });
+        }),
       onUnavailable: () => {
         this.memoryWatchUnavailable = true;
         this.dirty = true;
@@ -145,7 +155,10 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       return;
     }
     this.intervalTimer = setInterval(() => {
-      runDetachedMemorySync(() => this.sync({ reason: "interval" }), "interval");
+      void this.runBackgroundTask(
+        () => this.sync({ reason: "interval" }),
+        "memory sync failed (interval)",
+      );
     }, ms);
   }
 }
