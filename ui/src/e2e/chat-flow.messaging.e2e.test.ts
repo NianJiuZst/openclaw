@@ -875,6 +875,26 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
+      await composer.fill("日本語");
+      const confirmationConsumed = await composer.evaluate((textarea) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
+        textarea.dispatchEvent(end);
+        const confirm = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
+        textarea.dispatchEvent(confirm);
+        return confirm.defaultPrevented;
+      });
+      expect(confirmationConsumed).toBe(false);
+      expect(await composer.inputValue()).toBe("日本語");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await composer.dispatchEvent("keyup", { key: "Enter" });
+
       await composer.fill("default enter send");
       await composer.press("Enter");
       const defaultRequest = await gateway.waitForRequest("chat.send");
