@@ -895,6 +895,32 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await composer.dispatchEvent("keyup", { key: "Enter" });
 
+      // Software keyboards can commit text through input events without keydown.
+      await composer.evaluate((textarea) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "中文" }));
+        textarea.dispatchEvent(
+          new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: "中文" }),
+        );
+        textarea.value = "中文";
+        textarea.dispatchEvent(
+          new InputEvent("input", { bubbles: true, inputType: "insertText", data: "中文" }),
+        );
+      });
+      expect(await composer.inputValue()).toBe("中文");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await composer.dispatchEvent("keydown", {
+        key: "Enter",
+        keyCode: 229,
+        isComposing: false,
+      });
+      expect(await composer.inputValue()).toBe("中文");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await composer.dispatchEvent("keyup", { key: "Enter" });
+      await composer.press("Shift+Enter");
+      expect(await composer.inputValue()).toContain("\n");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
       await composer.fill("default enter send");
       await composer.press("Enter");
       const defaultRequest = await gateway.waitForRequest("chat.send");
