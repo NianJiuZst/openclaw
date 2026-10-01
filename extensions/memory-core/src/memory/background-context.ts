@@ -11,3 +11,8 @@ export function createMemoryBackgroundContext(): <T>(run: () => T) => T {
   // The snapshot clears turn-local stores; the instance supplies fresh plugin admission.
   return <T>(run: () => T): T => runDetached(() => runInPlugin(run));
 }
+
+export function runInMemoryCleanupContext<T>(run: () => T): T {
+  // Cleanup must detach the caller without requesting new admission from a retiring owner.
+  return runDetached(run);
+}
