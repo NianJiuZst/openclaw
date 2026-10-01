@@ -16,14 +16,24 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     return this.fileWatcher?.capacityDegraded ?? false;
   }
 
-  protected async runBackgroundTask(
+  // Settle asynchronous work inside its detached admission, not the publishing turn.
+  protected runBackgroundTask(
     run: () => void | Promise<unknown>,
     errorMessage: string,
   ): Promise<void> {
+    const reportError = (err: unknown) => log.warn(`${errorMessage}: ${String(err)}`);
     try {
-      await this.runInBackground(run);
+      return this.runInBackground(async () => {
+        try {
+          await run();
+        } catch (err) {
+          reportError(err);
+        }
+      });
     } catch (err) {
-      log.warn(`${errorMessage}: ${String(err)}`);
+      // Retired owners can reject admission before the detached callback starts.
+      reportError(err);
+      return Promise.resolve();
     }
   }
 

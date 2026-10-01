@@ -169,6 +169,11 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     this.publishedDatabase = new MemoryIndexDatabase(db);
   }
 
+  /** Exposes background completion ownership without timers or provider acquisition. */
+  runBackgroundTaskForTest(run: () => Promise<void>): Promise<void> {
+    return this.runBackgroundTask(run, "expected background completion failure");
+  }
+
   restartForStartup(): SessionStartupCatchupHarness {
     return new SessionStartupCatchupHarness(
       [],

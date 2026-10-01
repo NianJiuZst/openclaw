@@ -56,6 +56,26 @@ describe("session startup catch-up", () => {
     await testState.cleanup();
   });
 
+  it("handles background rejection outside the publishing turn context", async () => {
+    const harness = new SessionStartupCatchupHarness([]);
+    const turnContext = new AsyncLocalStorage<string>();
+    const pending = createDeferred<void>();
+    const observed: Array<string | undefined> = [];
+    const failure = {
+      toString() {
+        observed.push(turnContext.getStore());
+        return "expected failure";
+      },
+    };
+    const completion = turnContext.run("publishing-turn", () =>
+      harness.runBackgroundTaskForTest(() => pending.promise),
+    );
+    expect(observed).toEqual([]);
+    pending.reject(failure);
+    await completion;
+    expect(observed).toEqual([undefined]);
+  });
+
   async function writeSessionFile(
     name: string,
     content = "startup catchup",
