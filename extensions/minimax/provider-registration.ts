@@ -51,19 +51,17 @@ import { resolveMinimaxThinkingProfile } from "./thinking.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
-const DEFAULT_MODEL = MINIMAX_DEFAULT_MODEL_ID;
 const MINIMAX_USAGE_ENV_VAR_KEYS = [
   "MINIMAX_OAUTH_TOKEN",
   "MINIMAX_CODE_PLAN_KEY",
   "MINIMAX_CODING_API_KEY",
   "MINIMAX_API_KEY",
 ] as const;
-const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "hybrid-anthropic-openai",
-  anthropicModelDropThinkingBlocks: true,
-});
 const MINIMAX_PROVIDER_HOOKS = {
-  ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
+  ...buildProviderReplayFamilyHooks({
+    family: "hybrid-anthropic-openai",
+    anthropicModelDropThinkingBlocks: true,
+  }),
   wrapStreamFn: wrapMinimaxProviderStream,
   wrapSimpleCompletionStreamFn: wrapMinimaxProviderStream,
   resolveReasoningOutputMode: () => "native" as const,
@@ -214,7 +212,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
 
       return buildOauthProviderAuthResult({
         providerId: PORTAL_PROVIDER_ID,
-        defaultModel: `${PORTAL_PROVIDER_ID}/${DEFAULT_MODEL}`,
+        defaultModel: `${PORTAL_PROVIDER_ID}/${MINIMAX_DEFAULT_MODEL_ID}`,
         access: result.access,
         refresh: result.refresh,
         expires: result.expires,
@@ -276,7 +274,7 @@ function createMinimaxApiKeyMethod(region: MiniMaxRegion) {
       : "Enter MiniMax API key (sk-api- or sk-cp-)\nhttps://platform.minimax.io/user-center/basic-information/interface-key",
     profileId: isCn ? "minimax:cn" : "minimax:global",
     allowProfile: false,
-    defaultModel: `${API_PROVIDER_ID}/${DEFAULT_MODEL}`,
+    defaultModel: `${API_PROVIDER_ID}/${MINIMAX_DEFAULT_MODEL_ID}`,
     expectedProviders: isCn ? ["minimax", "minimax-cn"] : ["minimax"],
     applyConfig: (cfg) => (isCn ? applyMinimaxApiConfigCn(cfg) : applyMinimaxApiConfig(cfg)),
     wizard: metadata.wizard,

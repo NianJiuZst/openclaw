@@ -123,6 +123,7 @@ export type SidebarRecentSession = {
   kind?: string;
   pinned: boolean;
   pinnable: boolean;
+  snoozedUntil?: number;
   archived?: boolean;
   visibility?: SessionVisibility;
   sharingRole?: GatewaySessionRow["sharingRole"];
@@ -260,8 +261,8 @@ export type SidebarSessionGroupMenuState = {
   y: number;
 };
 
-export type SidebarSessionSortMode = "created" | "updated" | "people";
-export type SidebarSessionStatusFilter = "active" | "archived" | "all";
+export type SidebarSessionSortMode = (typeof SIDEBAR_SESSION_SORT_OPTIONS)[number]["mode"];
+export type SidebarSessionStatusFilter = (typeof SIDEBAR_SESSION_STATUS_OPTIONS)[number];
 export type SidebarEmptyGroupsMode = "filtering" | "always" | "never";
 export type SidebarSessionOwnerFilter = {
   ownerId: string | null;
@@ -311,7 +312,7 @@ export type SidebarCatalogSessionMutationScope = SidebarSessionMutationScope & {
 
 export type SidebarSessionPatch = Pick<
   SessionsPatchMutation,
-  "archived" | "pinned" | "unread" | "label" | "icon" | "color" | "category"
+  "archived" | "pinned" | "snoozedUntil" | "unread" | "label" | "icon" | "color" | "category"
 >;
 
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;
@@ -366,7 +367,7 @@ export function loadStoredSidebarSessionsShowSystem(): boolean {
 
 export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY);
-  return stored === "archived" || stored === "all" ? stored : "active";
+  return stored === "snoozed" || stored === "archived" || stored === "all" ? stored : "active";
 }
 
 function sidebarSessionOwnerFilterStorageKey(gatewayUrl: string, selfUserId: string): string {
@@ -536,16 +537,9 @@ export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
   { mode: "people", labelKey: "sessionsView.owners" },
-] as const satisfies ReadonlyArray<{
-  mode: SidebarSessionSortMode;
-  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.owners";
-}>;
+] as const;
 
-export const SIDEBAR_SESSION_STATUS_OPTIONS = [
-  "active",
-  "archived",
-  "all",
-] as const satisfies readonly SidebarSessionStatusFilter[];
+export const SIDEBAR_SESSION_STATUS_OPTIONS = ["active", "snoozed", "archived", "all"] as const;
 
 export function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;

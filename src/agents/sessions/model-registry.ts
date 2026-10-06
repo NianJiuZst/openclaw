@@ -100,7 +100,6 @@ export type ResolvedRequestAuth =
       error: string;
     };
 
-/** Result of loading custom models from models.json */
 interface CustomModelsResult {
   providers: RegistryProviderSources;
   error: string | undefined;
@@ -162,9 +161,6 @@ function mergeCompat(
   };
 }
 
-/**
- * Model registry - loads and manages models, resolves API keys via AuthStorage.
- */
 export class ModelRegistry {
   private models: Model[] = [];
   private config: OpenClawConfig | undefined;
@@ -230,7 +226,6 @@ export class ModelRegistry {
         : {}),
       ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
       allowWorkspaceScopedCurrent: true,
-      useRuntimeConfig: true,
     });
     this.loadModels();
     this.baseCatalogSnapshot = this.captureCatalogSnapshot();
@@ -283,9 +278,6 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this }, publishedModels);
   }
 
-  /**
-   * Reload models from disk (models.json).
-   */
   refresh(): void {
     this.providerRequestConfigs.clear();
     this.modelRequestHeaders.clear();
@@ -405,7 +397,7 @@ export class ModelRegistry {
           api: model.api ?? accepted.get(model.id)?.api ?? configured.api,
           baseUrl: model.baseUrl ?? accepted.get(model.id)?.baseUrl ?? configured.baseUrl,
           maxTokensSource: "configured",
-          headers: sanitizeModelHeaders(model.headers, { stripSecretRefMarkers: true }),
+          headers: sanitizeModelHeaders(model.headers),
         })),
       };
       providers[providerId] = inherited
@@ -422,7 +414,7 @@ export class ModelRegistry {
         apiKey: normalizeOptionalSecretInput(configured.apiKey),
         auth: configured.auth,
         authHeader: configured.authHeader,
-        headers: sanitizeModelHeaders(configured.headers, { stripSecretRefMarkers: true }),
+        headers: sanitizeModelHeaders(configured.headers),
       });
     }
     let combined = this.parseModels(providers);
@@ -615,15 +607,12 @@ export class ModelRegistry {
         );
       }
       for (const modelDef of models) {
-        const hasModelApi = Boolean(modelDef.api);
-
-        if (!hasProviderApi && !hasModelApi) {
+        if (!hasProviderApi && !modelDef.api) {
           throw new Error(
             `Provider ${providerName}, model ${modelDef.id}: no "api" specified. Set at provider or model level.`,
           );
         }
 
-        // Validate contextWindow/maxTokens only if provided (they have defaults)
         if (modelDef.contextWindow !== undefined && modelDef.contextWindow <= 0) {
           throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);
         }
@@ -638,12 +627,7 @@ export class ModelRegistry {
     const models: Model[] = [];
 
     for (const [providerName, providerConfig] of Object.entries(providers)) {
-      const modelDefs = providerConfig.models ?? [];
-      if (modelDefs.length === 0) {
-        continue;
-      }
-
-      for (const modelDef of modelDefs) {
+      for (const modelDef of providerConfig.models ?? []) {
         const api = modelDef.api ?? providerConfig.api;
         if (!api) {
           continue;
@@ -882,9 +866,6 @@ export class ModelRegistry {
     return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
   }
 
-  /**
-   * Check if a model is using OAuth credentials (subscription).
-   */
   isUsingOAuth(model: Model): boolean {
     const cred = this.authStorage.get(model.provider);
     return cred?.type === "oauth";
@@ -901,7 +882,17 @@ export class ModelRegistry {
   registerProvider(providerName: string, config: ProviderConfigInput): void {
     this.validateProviderConfig(providerName, config);
     this.applyProviderConfig(providerName, config);
-    this.upsertRegisteredProvider(providerName, config);
+    const existing = this.registeredProviders.get(providerName);
+    if (!existing) {
+      this.registeredProviders.set(providerName, config);
+      return;
+    }
+    // Undefined registration fields preserve the stored provider configuration.
+    for (const k of Object.keys(config) as (keyof ProviderConfigInput)[]) {
+      if (config[k] !== undefined) {
+        (existing as Record<string, unknown>)[k] = config[k];
+      }
+    }
   }
 
   /**
@@ -918,25 +909,6 @@ export class ModelRegistry {
     }
     this.registeredProviders.delete(providerName);
     this.refresh();
-  }
-
-  /**
-   * Upsert a provider config into registeredProviders.
-   * If the provider is already registered, defined values in the incoming config
-   * override existing ones; undefined values are preserved from the stored config.
-   * If the provider is not registered, the incoming config is stored as-is.
-   */
-  private upsertRegisteredProvider(providerName: string, config: ProviderConfigInput): void {
-    const existing = this.registeredProviders.get(providerName);
-    if (!existing) {
-      this.registeredProviders.set(providerName, config);
-      return;
-    }
-    for (const k of Object.keys(config) as (keyof ProviderConfigInput)[]) {
-      if (config[k] !== undefined) {
-        (existing as Record<string, unknown>)[k] = config[k];
-      }
-    }
   }
 
   private validateProviderConfig(providerName: string, config: ProviderConfigInput): void {
@@ -961,7 +933,6 @@ export class ModelRegistry {
 
   private applyProviderConfig(providerName: string, config: ProviderConfigInput): void {
     if (config.oauth) {
-      // Ensure the OAuth provider ID matches the provider name
       const oauthProvider: OAuthProviderInterface = {
         ...config.oauth,
         id: providerName,
@@ -985,7 +956,6 @@ export class ModelRegistry {
     this.storeProviderRequestConfig(providerName, config);
 
     if (config.models && config.models.length > 0) {
-      // Full replacement: remove existing models for this provider
       this.models = this.models.filter((m) => m.provider !== providerName);
 
       for (const modelDef of config.models) {
@@ -1023,9 +993,6 @@ export class ModelRegistry {
   }
 }
 
-/**
- * Input type for registerProvider API.
- */
 export interface ProviderConfigInput extends ProviderConfigBase {
   auth?: ProviderAuthMode;
   /** OAuth provider for /login support */
