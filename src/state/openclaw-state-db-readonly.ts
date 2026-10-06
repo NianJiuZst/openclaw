@@ -2,7 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync } from "node:fs";
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { acquireWithWait } from "../infra/acquire-with-wait.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   retainSnapshotTempDirectory,
@@ -99,7 +102,7 @@ export function getActiveOpenClawStateDatabaseReadSnapshot(
 /** Resolve a composite read from one online snapshot without redirecting live writers. */
 export async function withOpenClawStateDatabaseReadSnapshot<T>(
   operation: () => Promise<T>,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { admissionTimeoutMs?: number } = {},
 ): Promise<T> {
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
@@ -109,6 +112,9 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   const env = options.env ?? process.env;
   const callerSignal = getAsyncWorkSignal();
   const controller = new AbortController();
+  const admissionSignal = callerSignal
+    ? AbortSignal.any([callerSignal, controller.signal])
+    : controller.signal;
   const assertHostAdmission = () =>
     openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   let closeSnapshotWork: ((reason: unknown) => void) | undefined;
@@ -116,8 +122,19 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>;
     let prepared: AsyncPreparedSqliteReadOnlyLocation;
     try {
-      assertHostAdmission();
-      admission = captureOpenClawStateDatabaseReadAdmission(pathname);
+      // Wait only before capturing private bytes; callbacks and cleanup must never replay.
+      admission = await acquireWithWait({
+        acquire: () => {
+          admissionSignal.throwIfAborted();
+          assertHostAdmission();
+          return captureOpenClawStateDatabaseReadAdmission(pathname);
+        },
+        shouldRetry: (error) =>
+          error instanceof StateDatabaseAdmissionPendingError && error.databasePath === pathname,
+        deadlineMs: performance.now() + (options.admissionTimeoutMs ?? 0),
+        pollIntervalMs: 250,
+        sleep: (ms) => sleepWithAbort(ms, admissionSignal),
+      });
       controller.signal.throwIfAborted();
       if (
         isArtifactPreservingStateRead() &&

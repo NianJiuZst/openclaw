@@ -44,6 +44,9 @@ export type ConfigPreflightSnapshotRead = {
 
 type MeasurePreflightStep = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 
+// Cold startup can overlap another process's schema work, as with startup migration leases.
+const STARTUP_STATE_ADMISSION_TIMEOUT_MS = 5 * 60_000;
+
 function throwPluginRegistryPersistenceFailed(
   reason: string,
   repair = 'Run "openclaw doctor --fix" and retry.',
@@ -293,7 +296,7 @@ export async function readAdmittedConfigSnapshot(params: {
             }
             return { ...read, ...(recovery ? { recovery } : {}) };
           },
-          { env: params.env },
+          { env: params.env, admissionTimeoutMs: STARTUP_STATE_ADMISSION_TIMEOUT_MS },
         ),
       );
       if (
