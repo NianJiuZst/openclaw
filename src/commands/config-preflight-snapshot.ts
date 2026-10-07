@@ -44,7 +44,7 @@ export type ConfigPreflightSnapshotRead = {
 
 type MeasurePreflightStep = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 
-// Cold startup can overlap another process's schema work, as with startup migration leases.
+// Match the five-minute startup migration lease budget, including slow cold starts.
 const STARTUP_STATE_ADMISSION_TIMEOUT_MS = 5 * 60_000;
 
 function throwPluginRegistryPersistenceFailed(
@@ -56,17 +56,12 @@ function throwPluginRegistryPersistenceFailed(
   );
 }
 
-function formatPluginRegistryDifferences(
-  snapshot: PluginMetadataSnapshot | undefined,
-): string | undefined {
+function formatPluginRegistryDifferences(snapshot: PluginMetadataSnapshot | undefined): string {
   const differences = new Map(
     snapshot?.registryDiagnostics
       .flatMap((diagnostic) => diagnostic.differences ?? [])
       .map((difference) => [JSON.stringify(difference), difference] as const),
   );
-  if (differences.size === 0) {
-    return undefined;
-  }
   return [...differences.values()]
     .toSorted((left, right) =>
       [left.pluginId, left.persistedSource, left.derivedSource]
