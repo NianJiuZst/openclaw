@@ -505,13 +505,23 @@ describe("minimax provider hooks", () => {
         ["off", "max"],
         ["adaptive", "max"],
       ] as const
-    ).flatMap(([thinkingLevel, effort]) => [
-      [thinkingLevel, effort, true] as const,
-      [thinkingLevel, effort, false] as const,
-    ]),
+    ).flatMap(([thinkingLevel, effort]) =>
+      (
+        [
+          [m31Model.maxTokens, 500],
+          [undefined, 500],
+          [1024, 500],
+          [128, 500],
+          [128, undefined],
+        ] as const
+      ).map(
+        ([modelMaxTokens, requestedMaxTokens]) =>
+          [thinkingLevel, effort, modelMaxTokens, requestedMaxTokens] as const,
+      ),
+    ),
   )(
-    "sends M3.1 effort %s as %s (model output cap present: %s)",
-    async (thinkingLevel, effort, hasOutputCap) => {
+    "sends M3.1 effort %s as %s (model cap: %s, request cap: %s)",
+    async (thinkingLevel, effort, modelMaxTokens, requestedMaxTokens) => {
       const { apiProvider, portalProvider } = await registeredProviders();
       for (const provider of [apiProvider, portalProvider]) {
         for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
@@ -521,8 +531,10 @@ describe("minimax provider hooks", () => {
             api:
               hook === "wrapStreamFn" ? "anthropic-messages" : "openclaw-provider-simple:synthetic",
           };
-          if (!hasOutputCap) {
+          if (modelMaxTokens === undefined) {
             Reflect.deleteProperty(model, "maxTokens");
+          } else {
+            model.maxTokens = modelMaxTokens;
           }
           let payload: unknown;
           const wrapped = provider[hook]?.({
@@ -574,7 +586,7 @@ describe("minimax provider hooks", () => {
             },
             {
               apiKey: "synthetic-minimax-key",
-              maxTokens: 500,
+              maxTokens: requestedMaxTokens,
               reasoning: thinkingLevel === "adaptive" ? undefined : thinkingLevel,
               onPayload: (value) => {
                 payload = value;
@@ -585,7 +597,10 @@ describe("minimax provider hooks", () => {
           expect(await stream.result()).toMatchObject({ errorMessage: "stop before network" });
           expect(payload).toMatchObject({
             thinking: { type: "adaptive" },
-            max_tokens: 500,
+            max_tokens: Math.min(
+              requestedMaxTokens ?? m31Model.maxTokens,
+              modelMaxTokens ?? m31Model.maxTokens,
+            ),
             output_config: { effort },
           });
           expect(payload).not.toHaveProperty("thinking.budget_tokens");
