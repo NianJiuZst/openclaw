@@ -588,6 +588,11 @@ describe("minimax provider hooks", () => {
               apiKey: "synthetic-minimax-key",
               maxTokens: requestedMaxTokens,
               reasoning: thinkingLevel === "adaptive" ? undefined : thinkingLevel,
+              // M3.1 uses adaptive effort; manual budgets must not disable signed replay.
+              thinkingBudgets:
+                modelMaxTokens === m31Model.maxTokens
+                  ? { low: 0, medium: 0, high: 0, max: 0 }
+                  : undefined,
               onPayload: (value) => {
                 payload = value;
                 throw new Error("stop before network");

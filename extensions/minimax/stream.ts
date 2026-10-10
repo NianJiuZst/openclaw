@@ -34,7 +34,7 @@ export function wrapMinimaxProviderStream(ctx: ProviderWrapStreamFnContext): Str
       underlying,
       resolvedModel,
       context,
-      { ...options, reasoning: effort },
+      { ...options, reasoning: effort, thinkingBudgets: undefined },
       (payload) => {
         // M3.1 requires adaptive thinking and uses effort instead of a token budget.
         payload.thinking = { type: "adaptive" };
