@@ -493,18 +493,25 @@ describe("minimax provider hooks", () => {
     }
   });
 
-  it.each([
-    ["low", "low"],
-    ["medium", "medium"],
-    ["high", "high"],
-    ["xhigh", "xhigh"],
-    ["max", "max"],
-    [undefined, "max"],
-    ["off", "max"],
-    ["adaptive", "max"],
-  ] as const)(
-    "sends M3.1 effort %s through the registered stream hook",
-    async (thinkingLevel, effort) => {
+  it.each(
+    (
+      [
+        ["low", "low"],
+        ["medium", "medium"],
+        ["high", "high"],
+        ["xhigh", "xhigh"],
+        ["max", "max"],
+        [undefined, "max"],
+        ["off", "max"],
+        ["adaptive", "max"],
+      ] as const
+    ).flatMap(([thinkingLevel, effort]) => [
+      [thinkingLevel, effort, true] as const,
+      [thinkingLevel, effort, false] as const,
+    ]),
+  )(
+    "sends M3.1 effort %s as %s (model output cap present: %s)",
+    async (thinkingLevel, effort, hasOutputCap) => {
       const { apiProvider, portalProvider } = await registeredProviders();
       for (const provider of [apiProvider, portalProvider]) {
         for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
@@ -514,6 +521,9 @@ describe("minimax provider hooks", () => {
             api:
               hook === "wrapStreamFn" ? "anthropic-messages" : "openclaw-provider-simple:synthetic",
           };
+          if (!hasOutputCap) {
+            Reflect.deleteProperty(model, "maxTokens");
+          }
           let payload: unknown;
           const wrapped = provider[hook]?.({
             provider: provider.id,
@@ -608,10 +618,6 @@ describe("minimax provider hooks", () => {
         effort: reasoning ?? "high",
       });
     }
-    const modelWithoutOutputCap = { ...m31Model };
-    Reflect.deleteProperty(modelWithoutOutputCap, "maxTokens");
-    void wrapped?.(modelWithoutOutputCap, { messages: [] }, { maxTokens: 500 });
-    expect(payload.max_tokens).toBe(500);
   });
 
   it.each([

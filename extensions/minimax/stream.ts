@@ -4,9 +4,15 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isMinimaxM31ModelId, MINIMAX_M31_THINKING_LEVELS } from "./thinking.js";
+import { buildMinimaxApiModelDefinition } from "./model-definitions.js";
+import {
+  isMinimaxM31ModelId,
+  MINIMAX_M31_MODEL_ID,
+  MINIMAX_M31_THINKING_LEVELS,
+} from "./thinking.js";
 
 const FAST_MODE_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
+const M31_MAX_TOKENS = buildMinimaxApiModelDefinition(MINIMAX_M31_MODEL_ID).maxTokens;
 
 export function wrapMinimaxProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   const underlying = FAST_MODE_HOOKS.wrapStreamFn?.(ctx) ?? ctx.streamFn ?? streamSimple;
@@ -16,10 +22,13 @@ export function wrapMinimaxProviderStream(ctx: ProviderWrapStreamFnContext): Str
     }
     const thinkingLevel = options?.reasoning ?? ctx.thinkingLevel;
     const effort = MINIMAX_M31_THINKING_LEVELS.find((level) => level === thinkingLevel) ?? "max";
+    // Missing metadata must not disable thinking while the client converts signed history.
+    const resolvedModel =
+      model.maxTokens === undefined ? { ...model, maxTokens: M31_MAX_TOKENS } : model;
     // Resolve mandatory thinking before the client converts prior assistant messages.
     return streamWithPayloadPatch(
       underlying,
-      model,
+      resolvedModel,
       context,
       { ...options, reasoning: effort },
       (payload) => {
@@ -31,7 +40,7 @@ export function wrapMinimaxProviderStream(ctx: ProviderWrapStreamFnContext): Str
         };
         const maxTokens = options?.maxTokens;
         if (typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0) {
-          payload.max_tokens = Math.min(Math.floor(maxTokens), model.maxTokens ?? maxTokens);
+          payload.max_tokens = Math.min(Math.floor(maxTokens), resolvedModel.maxTokens);
         }
       },
     );
