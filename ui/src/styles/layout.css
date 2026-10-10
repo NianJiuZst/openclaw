@@ -733,6 +733,12 @@ openclaw-settings-save-indicator:empty {
   height: 15px;
 }
 
+.settings-save-indicator__claw {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+}
+
 .settings-save-indicator__claw svg {
   fill: currentColor;
   stroke: none;
@@ -863,11 +869,7 @@ openclaw-settings-save-indicator:empty {
   white-space: nowrap;
 }
 
-.topbar .nav-collapse-toggle__icon {
-  width: 20px;
-  height: 20px;
-}
-
+.topbar .nav-collapse-toggle__icon,
 .topbar .nav-collapse-toggle__icon svg {
   width: 20px;
   height: 20px;

@@ -31,7 +31,7 @@ export function wrapMinimaxProviderStream(ctx: ProviderWrapStreamFnContext): Str
         };
         const maxTokens = options?.maxTokens;
         if (typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0) {
-          payload.max_tokens = Math.min(Math.floor(maxTokens), model.maxTokens);
+          payload.max_tokens = Math.min(Math.floor(maxTokens), model.maxTokens ?? maxTokens);
         }
       },
     );

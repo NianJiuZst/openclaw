@@ -14,6 +14,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { installHistoryPaginationProbe } from "./chat-history-pagination-probe.test-support.ts";
 import { installChatLoadingReadinessObserver } from "./chat-loading-readiness.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -380,17 +381,6 @@ suite.define(() => {
             ) {
               return;
             }
-            if (
-              ![
-                "chat.startup",
-                "chat.history",
-                "sessions.resolve",
-                "agents.list",
-                "agent.identity.get",
-              ].includes(frame.method)
-            ) {
-              return;
-            }
             const params = isRecord(frame.params) ? frame.params : {};
             const metric: RpcMetric = {
               requestId: frame.id,
@@ -435,6 +425,7 @@ suite.define(() => {
           });
         });
         await page.goto(url.toString());
+        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const selectedPane = page.locator(
           "openclaw-chat-pane.chat-pane-cache__pane--active:not([inert])",
@@ -569,11 +560,11 @@ suite.define(() => {
               selectedPane.evaluate((element) => {
                 const pane = element as HTMLElement & {
                   loadingOlder: boolean;
-                  historyIntentConsumed: boolean;
+                  historyIntentTimer: number | null;
                 };
                 return {
                   loadingOlder: pane.loadingOlder,
-                  historyIntentConsumed: pane.historyIntentConsumed,
+                  historyIntentConsumed: pane.historyIntentTimer !== null,
                 };
               }),
             )

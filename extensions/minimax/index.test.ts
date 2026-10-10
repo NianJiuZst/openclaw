@@ -608,6 +608,10 @@ describe("minimax provider hooks", () => {
         effort: reasoning ?? "high",
       });
     }
+    const modelWithoutOutputCap = { ...m31Model };
+    Reflect.deleteProperty(modelWithoutOutputCap, "maxTokens");
+    void wrapped?.(modelWithoutOutputCap, { messages: [] }, { maxTokens: 500 });
+    expect(payload.max_tokens).toBe(500);
   });
 
   it.each([
