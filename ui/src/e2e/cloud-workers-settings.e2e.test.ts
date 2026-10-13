@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   installMockGateway,
   type MockGatewayRequest,
@@ -194,7 +194,7 @@ suite.define(() => {
       await page
         .locator(".settings-row")
         .filter({ hasText: "Desktop" })
-        .locator("wa-switch")
+        .getByRole("switch")
         .click();
       await page.getByLabel("Crabbox binary").fill("/opt/bin/crabbox-draft");
       await page.getByLabel("Warm images", { exact: true }).selectOption("off");
@@ -227,26 +227,27 @@ suite.define(() => {
       expect(await machineClass.getAttribute("list")).toBeNull();
       const saveButton = page.getByRole("button", { name: "Save", exact: true });
       // Saved temporarily hides Apply changes; wait for the applied revision so
-      // its background config.get cannot consume the foreground refresh gate.
+      // its background config.get cannot consume the notification refresh gate.
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as
-              | (HTMLElement & { runtime?: { context: ApplicationContext } })
-              | null;
-            return app?.runtime?.context.runtimeConfig.state.configSnapshot?.appliedConfigHash;
-          }),
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+          ),
         )
         .toBe("cloud-workers-2");
       const configGetCount = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.get");
+      await saveButton.focus();
       await gateway.emitGatewayEvent("config.changed", {
         path: "/tmp/openclaw.json",
         hash: "cloud-workers-2",
         ts: Date.now(),
       });
       await gateway.waitForRequest("config.get", { after: configGetCount });
-      await expect.poll(() => saveButton.isDisabled()).toBe(true);
+      expect(await saveButton.isEnabled()).toBe(true);
+      expect(await saveButton.evaluate((button) => button === document.activeElement)).toBe(true);
+      expect(await machineClass.inputValue()).toBe("batch/ARM64.v2");
       await gateway.resolveDeferred(
         "config.get",
         configResponse(
@@ -821,21 +822,10 @@ suite.define(() => {
       const confirmation = await waitForConfirmModal(page);
       const socketCount = await gateway.getSocketCount();
       const configGetCount = (await gateway.getRequests("config.get")).length;
-      const originalGateway = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                connection: { gatewayUrl: string };
-                connect: (options: { token: string }) => void;
-                snapshot: { client: { instanceId: string } | null };
-              };
-            };
-          };
-        };
-        const activeGateway = app.runtime?.context.gateway;
-        const client = activeGateway?.snapshot.client;
-        if (!activeGateway || !client) {
+      const originalGateway = await evaluateControlUiContext(page, (application) => {
+        const activeGateway = application.gateway;
+        const client = activeGateway.snapshot.client;
+        if (!client) {
           throw new Error("Expected a connected Gateway client before confirmation");
         }
         const identity = {
@@ -851,32 +841,20 @@ suite.define(() => {
         .toBeGreaterThan(configGetCount);
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: {
-                context: {
-                  gateway: {
-                    connection: { gatewayUrl: string };
-                    snapshot: { client: { instanceId: string } | null; phase: string };
-                  };
-                };
-              };
-            };
-            const activeGateway = app.runtime?.context.gateway;
+          evaluateControlUiContext(page, (application) => {
+            const activeGateway = application.gateway;
             return {
-              clientInstanceId: activeGateway?.snapshot.client?.instanceId,
-              gatewayUrl: activeGateway?.connection.gatewayUrl,
-              phase: activeGateway?.snapshot.phase,
+              clientInstanceId: activeGateway.snapshot.client?.instanceId,
+              gatewayUrl: activeGateway.connection.gatewayUrl,
+              phase: activeGateway.snapshot.phase,
             };
           }),
         )
         .toMatchObject({ gatewayUrl: originalGateway.gatewayUrl, phase: "connected" });
-      const replacementClientInstanceId = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: { gateway: { snapshot: { client: { instanceId: string } } } } };
-        };
-        return app.runtime?.context.gateway.snapshot.client.instanceId;
-      });
+      const replacementClientInstanceId = await evaluateControlUiContext(
+        page,
+        (application) => application.gateway.snapshot.client?.instanceId,
+      );
       expect(replacementClientInstanceId).not.toBe(originalGateway.clientInstanceId);
       await expect
         .poll(() =>
