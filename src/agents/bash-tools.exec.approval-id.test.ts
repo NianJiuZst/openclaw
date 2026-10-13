@@ -516,7 +516,6 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.waitDecision");
   });
 
-
   it("delivers an explicitly requested agent follow-up through the original external route", async () => {
     const followup = createDeferredCore<Record<string, unknown>>();
     mockApproval("allow-once", {
