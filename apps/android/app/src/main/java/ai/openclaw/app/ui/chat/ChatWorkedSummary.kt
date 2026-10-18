@@ -211,18 +211,29 @@ internal fun prepareCompletedWorkSpans(
         if (knownRunIds(turn[end + 1]).any { it !in replyPositions }) break
         end++
       }
-      val work = mutableListOf<Int>()
-      val answers = mutableListOf<Int>()
+      val unansweredRows = mutableSetOf<Int>()
+      val completedReplyPositions = replyPositions.toMutableMap()
       for (index in start..end) {
         val item = turn[index]
+        if (!hasUnresolvedWork(item)) continue
         val message = source(item)
         val owners = knownRunIds(item)
         val sourcePosition = message?.let { sourcePositions.getValue(it.id) } ?: -1
         val replyPosition = owners.mapNotNull(replyPositions::get).minOrNull() ?: terminalPosition
         val unresolvedPosition = if (item is ChatTimelineItem.ToolActivity) maxOf(sourcePosition, item.lastFailureMessageIndex) else sourcePosition
-        val unansweredWork = hasUnresolvedWork(item) && unresolvedPosition >= replyPosition
-        val replylessRun = owners.any { it !in replyPositions }
-        if (index != finalIndex && isWork(item) && !unansweredWork && !replylessRun) work.add(turnOffset + index) else answers.add(turnOffset + index)
+        if (unresolvedPosition >= replyPosition) unansweredRows.add(index)
+        owners.forEach { runId ->
+          if (unresolvedPosition >= (replyPositions[runId] ?: terminalPosition)) completedReplyPositions.remove(runId)
+        }
+      }
+      val work = mutableListOf<Int>()
+      val answers = mutableListOf<Int>()
+      for (index in start..end) {
+        val item = turn[index]
+        // Later runs must not fold completed replies; unanswered failures still keep a run's earlier text as work.
+        val completedRunReply = item is ChatTimelineItem.Message && replyRunId(item)?.let { completedReplyPositions[it] == sourcePositions.getValue(item.message.id) } == true
+        val replylessRun = knownRunIds(item).any { it !in replyPositions }
+        if (index != finalIndex && !completedRunReply && isWork(item) && index !in unansweredRows && !replylessRun) work.add(turnOffset + index) else answers.add(turnOffset + index)
       }
       if (work.isEmpty()) {
         return@forEachIndexed
