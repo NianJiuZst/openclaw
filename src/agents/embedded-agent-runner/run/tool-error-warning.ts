@@ -3,7 +3,11 @@ import type { VerboseLevel } from "../../../auto-reply/thinking.js";
 import { formatToolAggregateParts } from "../../../auto-reply/tool-meta.js";
 import { formatInlineCodeSpan } from "../../../shared/markdown-code.js";
 import { resolveToolDisplay } from "../../tool-display.js";
-import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
+import {
+  isExecLikeToolName,
+  summarizeToolValidationError,
+  type ToolErrorSummary,
+} from "../../tool-error-summary.js";
 
 function formatWarningToolLabel(
   toolName: string,
@@ -25,6 +29,10 @@ export function buildFailureWarning(params: {
 }): string | undefined {
   if (params.hasUserFacingReply) {
     return undefined;
+  }
+  if (summarizeToolValidationError(params.lastToolError)) {
+    const toolLabel = resolveToolDisplay({ name: params.lastToolError.toolName }).label;
+    return `⚠️ ${toolLabel} failed: invalid arguments`;
   }
   const includeDetails = params.verboseLevel === "full";
   const failureVerb = params.lastToolError.executionStarted === false ? "blocked" : "failed";
